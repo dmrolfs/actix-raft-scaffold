@@ -1,0 +1,16 @@
+syntax = "proto3";
+package api.cluster;
+
+message Failure {
+    string description = 1;
+}
+
+message NodeId {
+    uint64 id = 1;
+}
+
+message NodeInfo {
+    string ui_address = 1;
+    string app_address = 2;
+    string cluster_address = 3;
+}

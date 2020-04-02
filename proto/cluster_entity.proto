@@ -1,0 +1,77 @@
+syntax = "proto3";
+package api.cluster;
+
+import "common.proto";
+import "google/protobuf/any.proto";
+import "google/protobuf/empty.proto";
+
+
+// Raft log entry.
+message Entry {
+    // This entry's term.
+    uint64 term = 1;
+
+    // This entry's index.
+    uint64 index = 2;
+
+    // This entry's payload.
+    oneof payload {
+        EntryNormal normal = 3;
+        MembershipConfig config_change = 4;
+        SnapshotPath snapshot_pointer = 5;
+        google.protobuf.Empty blank = 6;
+    }
+
+}
+
+message EntryNormal {
+    Normal entry = 1;
+}
+
+message Normal {
+    google.protobuf.Any data = 1;
+}
+
+// A model of the membership configuration of the cluster.
+message MembershipConfig {
+    // A flag indicating if the system is currently in a joint consensus state.
+    bool is_in_joint_consensus = 1;
+
+    // Voting members of the Raft cluster.
+    repeated NodeId members = 2;
+
+    // Non-voting members of the cluster.
+    //
+    // These nodes are being brought up-to-speed by the leader and will be transitioned over to
+    // being standard members once they are up-to-date.
+    repeated NodeId non_voters = 3;
+
+    // The set of nodes which are to be removed after joint consensus is complete.
+    repeated NodeId removing = 4;
+}
+
+// A log entry pointing to a snapshot.
+//
+// This will only be present when read from storage. An entry of this type will never be
+// transmitted from a leader during replication, an `InstallSnapshotRequest`
+// RPC will be sent instead.
+message SnapshotPath {
+    string path = 1;
+}
+
+// A struct used to implement the _conflicting term_ optimization outlined in §5.3 for
+// log replication.
+//
+// This value will only be present, and should only be considered, when an
+// `AppendEntriesResponse` object has a `success` value of `false`.
+//
+// This implementation of Raft uses this value to more quickly synchronize a leader with its
+// followers which may be some distance behind in replication, may have conflicting entries, or
+// which may be new to the cluster.
+message ConflictOpt {
+    // The term of the most recent entry which does not conflict with the received request.
+    uint64 term = 1;
+
+    // The index of the most recent entry which does not conflict with the received request.
+    uint64 index = 2;
+}

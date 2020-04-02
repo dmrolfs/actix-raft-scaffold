@@ -1,0 +1,243 @@
+syntax = "proto3";
+package api.raft;
+
+service Router {
+    // An RPC invoked by the leader to replicate log entries (§5.3); also used as heartbeat (§5.2).
+    rpc AppendEntries (RaftAppendEntriesRequest) returns (RaftAppendEntriesResponse);
+
+    // Invoked by the Raft leader to send chunks of a snapshot to a follower (§7).
+    //
+    // The result type of calling with this message type is RaftInstallSnapshotResponse. The Raft
+    // spec assigns no significance to failures during the handling or sending of RPCs and all
+    // RPCs are handled in an idempotent fashion, so Raft will almost always retry sending a
+    // failed RPC, depending on the state of the Raft.
+    rpc InstallSnapshot (RaftInstallSnapshotRequest) returns (RaftInstallSnapshotResponse);
+
+    // An RPC invoked by candidates to gather votes (§5.2).
+    //
+    // The result type of calling the Raft actor with this message type is `RaftVoteResponse`.
+    // The Raft spec assigns no significance to failures during the handling or sending of RPCs and
+    // all RPCs are handled in an idempotent fashion, so Raft will almost always retry sending a
+    // failed RPC, depending on the state of the Raft.
+    rpc Vote (RaftVoteRequest) returns (RaftVoteResponse);
+
+    rpc JoinCluster (JoinClusterRequest) returns (JoinClusterResponse);
+
+    rpc LeaveCluster (LeaveClusterRequest) returns (LeaveClusterResponse);
+}
+
+
+message Failure {
+    string description = 1;
+}
+
+message NodeId {
+    uint64 id = 1;
+}
+
+message NodeInfo {
+    string ui_address = 1;
+    string app_address = 2;
+    string cluster_address = 3;
+}
+
+message JoinClusterRequest {
+    NodeId node_id = 1;
+    NodeInfo node_info = 2;
+}
+
+message JoinClusterResponse {
+    oneof response {
+        NodeId added = 1;
+        Failure failure = 2;
+    }
+}
+
+message LeaveClusterRequest {
+    NodeId node_id = 1;
+}
+
+message LeaveClusterResponse {
+    oneof response {
+        NodeId removed = 1;
+        Failure failure = 2;
+    }
+}
+
+// Applications using this Raft implementation are responsible for implementing the
+// networking/transport layer which must move RPCs between nodes. Once the application instance
+// recieves a Raft RPC, it must send the RPC to the Raft node via its `actix::Addr` and then
+// return the response to the original sender.
+//
+message RaftAppendEntriesRequest {
+    /// A non-standard field, this is the ID of the intended recipient of this RPC.
+    uint64 target = 1;
+
+    /// The leader's current term.
+    uint64 term = 2;
+
+    /// The leader's ID. Useful in redirecting clients.
+    uint64 leader_id = 3;
+
+    /// The index of the log entry immediately preceding the new entries.
+    uint64 prev_log_index = 4;
+
+    /// The term of the `prev_log_index` entry.
+    uint64 prev_log_term = 5;
+
+    /// The new log entries to store.
+    ///
+    /// This may be empty when the leader is sending heartbeats. Entries
+    /// may be batched for efficiency.
+    repeated DataEntry entries = 6;
+
+    /// The leader's commit index.
+    uint64 leader_commit = 7;
+}
+
+// Actuator's Raft log entry.
+message DataEntry {
+    // This entry's term.
+    uint64 term = 1;
+
+    // This entry's index.
+    uint64 index = 2;
+
+    // This entry's payload.
+    oneof payload {
+        AppData normal = 3;
+        MembershipConfig config_change = 4;
+        SnapshotPath snapshot_pointer = 5;
+    }
+
+    message AppData {
+        string stub = 1;
+    }
+
+    // A model of the membership configuration of the cluster.
+    message MembershipConfig {
+        // A flag indicating if the system is currently in a joint consensus state.
+        bool is_in_joint_consensus = 1;
+
+        // Voting members of the Raft cluster.
+        repeated NodeId members = 2;
+
+        // Non-voting members of the cluster.
+        //
+        // These nodes are being brought up-to-speed by the leader and will be transitioned over to
+        // being standard members once they are up-to-date.
+        repeated NodeId non_voters = 3;
+
+        // The set of nodes which are to be removed after joint consensus is complete.
+        repeated NodeId removing = 4;
+    }
+
+    // A log entry pointing to a snapshot.
+    //
+    // This will only be present when read from storage. An entry of this type will never be
+    // transmitted from a leader during replication, an `InstallSnapshotRequest`
+    // RPC will be sent instead.
+    message SnapshotPath {
+        string path = 1;
+    }
+}
+
+
+// The Raft spec assigns no significance to failures during the handling or sending of RPCs
+// and all RPCs are handled in an idempotent fashion, so Raft will almost always retry
+// sending a failed RPC, depending on the state of the Raft.
+message RaftAppendEntriesResponse {
+    // The responding node's current term, for leader to update itself.
+    uint64 term = 1;
+
+    // Will be true if follower contained entry matching `prev_log_index` and `prev_log_term`.
+    bool success = 2;
+
+    // A value used to implement the _conflicting term_ optimization outlined in §5.3.
+    //
+    // This value will only be present, and should only be considered, when `success` is `false`.
+    oneof conflict {
+        ConflictOpt conflict_opt = 3;
+    }
+
+    // A struct used to implement the _conflicting term_ optimization outlined in §5.3 for
+    // log replication.
+    //
+    // This value will only be present, and should only be considered, when an
+    // `AppendEntriesResponse` object has a `success` value of `false`.
+    //
+    // This implementation of Raft uses this value to more quickly synchronize a leader with its
+    // followers which may be some distance behind in replication, may have conflicting entries, or
+    // which may be new to the cluster.
+    message ConflictOpt {
+        // The term of the most recent entry which does not conflict with the received request.
+        uint64 term = 1;
+
+        // The index of the most recent entry which does not conflict with the received request.
+        uint64 index = 2;
+    }
+}
+
+message RaftInstallSnapshotRequest {
+    // A non-standard field, this is the ID of the intended recipient of this RPC.
+    uint64 target = 1;
+
+    // The leader's current term.
+    uint64 term = 2;
+
+    // The leader's ID. Useful in redirecting clients.
+    uint64 leader_id = 3;
+
+    // The snapshot replaces all log entries up through and including this index.
+    uint64 last_included_index = 4;
+
+    // The term of the `last_included_index`.
+    uint64 last_included_term = 5;
+
+    // The byte offset where chunk is positioned in the snapshot file.
+    uint64 offset = 6;
+
+    // The raw Vec<u8> of the snapshot chunk, starting at `offset`.
+    bytes data = 7;
+
+    /// Will be `true` if this is the last chunk in the snapshot.
+    bool done = 8;
+}
+
+// An RPC response to an `RaftInstallSnapshotResponse` message.
+message RaftInstallSnapshotResponse {
+    // The receiving node's current term, for leader to update itself.
+    uint64 term = 1;
+}
+
+message RaftVoteRequest {
+    // A non-standard field, this is the ID of the intended recipient of this RPC.
+    uint64 target = 1;
+
+    // The candidate's current term.
+    uint64 term = 2;
+
+    // The candidate's ID.
+    uint64 candidate_id = 3;
+
+    // The index of the candidate’s last log entry (§5.4).
+    uint64 last_log_index = 4;
+
+    // The term of the candidate’s last log entry (§5.4).
+    uint64 last_log_term = 5;
+}
+
+// An RPC response to an `RaftVoteResponse` message.
+message RaftVoteResponse {
+    // The current term of the responding node, for the candidate to update itself.
+    uint64 term = 1;
+
+    // Will be true if the candidate received a vote from the responder.
+    bool vote_granted = 2;
+
+    // Will be true if the candidate is unknown to the responding node's config.
+    //
+    // If this field is true, and the sender's (the candidate's) index is greater than 0, then it
+    // should revert to the NonVoter state; if the sender's index is 0, then resume campaigning.
+    bool is_candidate_unknown = 3;
+}

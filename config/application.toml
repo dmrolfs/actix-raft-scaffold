@@ -1,0 +1,21 @@
+max_discovery_timeout = 5
+max_raft_init_timeout = 5
+
+host = "127.0.0.1:8000"
+discovery_host = "127.0.0.1:8080"
+join_strategy = "static"
+
+[[nodes]]
+cluster_addr = "127.0.0.1:8000"
+app_addr = "127.0.0.1:9000"
+public_addr = "127.0.0.1:8080"
+
+[[nodes]]
+cluster_addr = "127.0.0.1:8001"
+app_addr = "127.0.0.1:9001"
+public_addr = "127.0.0.1:8081"
+
+[[nodes]]
+cluster_addr = "127.0.0.1:8002"
+app_addr = "127.0.0.1:9002"
+public_addr = "127.0.0.1:8082"

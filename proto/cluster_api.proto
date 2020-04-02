@@ -1,0 +1,196 @@
+syntax = "proto3";
+package api.cluster;
+
+import "common.proto";
+import "cluster_entity.proto";
+//import "google/protobuf/any.proto";
+//import "google/protobuf/empty.proto";
+
+service Router {
+    rpc NodeInfo (NodeIdMessage) returns (NodeInfoMessage);
+
+    rpc ClusterNodes (ClusterNodesRequest) returns (ClusterNodesResponse);
+
+    rpc ClusterState (ClusterStateRequest) returns (ClusterStateResponse);
+
+    // An RPC invoked by the leader to replicate log entries (§5.3); also used as heartbeat (§5.2).
+    rpc AppendEntries (RaftAppendEntriesRequest) returns (RaftAppendEntriesResponse);
+
+    // Invoked by the Raft leader to send chunks of a snapshot to a follower (§7).
+    //
+    // The result type of calling with this message type is RaftInstallSnapshotResponse. The Raft
+    // spec assigns no significance to failures during the handling or sending of RPCs and all
+    // RPCs are handled in an idempotent fashion, so Raft will almost always retry sending a
+    // failed RPC, depending on the state of the Raft.
+    rpc InstallSnapshot (RaftInstallSnapshotRequest) returns (RaftInstallSnapshotResponse);
+
+    // An RPC invoked by candidates to gather votes (§5.2).
+    //
+    // The result type of calling the Raft actor with this message type is `RaftVoteResponse`.
+    // The Raft spec assigns no significance to failures during the handling or sending of RPCs and
+    // all RPCs are handled in an idempotent fashion, so Raft will almost always retry sending a
+    // failed RPC, depending on the state of the Raft.
+    rpc Vote (RaftVoteRequest) returns (RaftVoteResponse);
+
+    rpc JoinCluster (NodeInfoMessage) returns (ChangeClusterMembershipResponse);
+
+    rpc LeaveCluster (NodeIdMessage) returns (ChangeClusterMembershipResponse);
+}
+
+message NodeIdMessage {
+    NodeId node_id = 1;
+}
+
+message NodeInfoMessage {
+    NodeId node_id = 1;
+    NodeInfo node_info = 2;
+}
+
+message ClusterNodesRequest {}
+
+message ClusterNodesResponse {
+    map<uint64, NodeInfo> nodes = 1;
+}
+
+message ClusterStateRequest {}
+
+message ClusterStateResponse {
+    ClusterState state = 1;
+}
+
+enum ClusterState {
+    INITIALIZED = 0;
+    SINGLE_NODE = 1;
+    CLUSTER = 2;
+}
+
+// Applications using this Raft implementation are responsible for implementing the
+// networking/transport layer which must move RPCs between nodes. Once the application instance
+// recieves a Raft RPC, it must send the RPC to the Raft node via its `actix::Addr` and then
+// return the response to the original sender.
+//
+message RaftAppendEntriesRequest {
+    /// A non-standard field, this is the ID of the intended recipient of this RPC.
+    uint64 target = 1;
+
+    /// The leader's current term.
+    uint64 term = 2;
+
+    /// The leader's ID. Useful in redirecting clients.
+    uint64 leader_id = 3;
+
+    /// The index of the log entry immediately preceding the new entries.
+    uint64 prev_log_index = 4;
+
+    /// The term of the `prev_log_index` entry.
+    uint64 prev_log_term = 5;
+
+    /// The new log entries to store.
+    ///
+    /// This may be empty when the leader is sending heartbeats. Entries
+    /// may be batched for efficiency.
+    repeated Entry entries = 6;
+
+    /// The leader's commit index.
+    uint64 leader_commit = 7;
+}
+
+// The Raft spec assigns no significance to failures during the handling or sending of RPCs
+// and all RPCs are handled in an idempotent fashion, so Raft will almost always retry
+// sending a failed RPC, depending on the state of the Raft.
+message RaftAppendEntriesResponse {
+    // The responding node's current term, for leader to update itself.
+    uint64 term = 1;
+
+    // Will be true if follower contained entry matching `prev_log_index` and `prev_log_term`.
+    bool success = 2;
+
+    // A value used to implement the _conflicting term_ optimization outlined in §5.3.
+    //
+    // This value will only be present, and should only be considered, when `success` is `false`.
+    oneof conflict {
+        ConflictOpt conflict_opt = 3;
+    }
+}
+
+message RaftInstallSnapshotRequest {
+    // A non-standard field, this is the ID of the intended recipient of this RPC.
+    uint64 target = 1;
+
+    // The leader's current term.
+    uint64 term = 2;
+
+    // The leader's ID. Useful in redirecting clients.
+    uint64 leader_id = 3;
+
+    // The snapshot replaces all log entries up through and including this index.
+    uint64 last_included_index = 4;
+
+    // The term of the `last_included_index`.
+    uint64 last_included_term = 5;
+
+    // The byte offset where chunk is positioned in the snapshot file.
+    uint64 offset = 6;
+
+    // The raw Vec<u8> of the snapshot chunk, starting at `offset`.
+    bytes data = 7;
+
+    /// Will be `true` if this is the last chunk in the snapshot.
+    bool done = 8;
+}
+
+// An RPC response to an `RaftInstallSnapshotResponse` message.
+message RaftInstallSnapshotResponse {
+    // The receiving node's current term, for leader to update itself.
+    uint64 term = 1;
+}
+
+message RaftVoteRequest {
+    // A non-standard field, this is the ID of the intended recipient of this RPC.
+    uint64 target = 1;
+
+    // The candidate's current term.
+    uint64 term = 2;
+
+    // The candidate's ID.
+    uint64 candidate_id = 3;
+
+    // The index of the candidate’s last log entry (§5.4).
+    uint64 last_log_index = 4;
+
+    // The term of the candidate’s last log entry (§5.4).
+    uint64 last_log_term = 5;
+}
+
+// An RPC response to an `RaftVoteResponse` message.
+message RaftVoteResponse {
+    // The current term of the responding node, for the candidate to update itself.
+    uint64 term = 1;
+
+    // Will be true if the candidate received a vote from the responder.
+    bool vote_granted = 2;
+
+    // Will be true if the candidate is unknown to the responding node's config.
+    //
+    // If this field is true, and the sender's (the candidate's) index is greater than 0, then it
+    // should revert to the NonVoter state; if the sender's index is 0, then resume campaigning.
+    bool is_candidate_unknown = 3;
+}
+
+
+message ChangeClusterMembershipResponse {
+    oneof response {
+        ClusterMembershipChange result = 1;
+        Failure failure = 2;
+    }
+}
+
+message ClusterMembershipChange {
+    NodeId node_id = 1;
+    MembershipAction action = 2;
+}
+
+enum MembershipAction {
+    ADDED = 0;
+    REMOVED = 1;
+}
