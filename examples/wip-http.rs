@@ -60,10 +60,20 @@ async fn main() {
                     .header( "LOCATION", "/static/index.html")
                     .finish()
             })))
-            .service( web::resource("/node/{uid}").to_async(node_route))
-            .service( web::resource("/cluster/nodes").to_async(nodes_route))
-            .service( web::resource("/cluster/state").to_async(state_route))
-            .service( web::resource("/cluster/join").route(web::put().to_async(join_cluster_route)))
+            .service(
+                web::scope("/api/cluster")
+                    .service(web::resource("/nodes").to_async(all_nodes_route))
+                    .service(
+                        web::resource("/nodes/{uid}")
+                            .route(web::get().to_async(node_route))
+                            .route(web::post().to_async(join_cluster_route))
+                            .route(web::delete().to_async(leave_cluster_route)),
+                    )
+                    .service(web::resource("/state").route(web::get().to_async(state_route)))
+                    .service(web::resource("/entries").route(web::post().to_async(append_entries_route)))
+                    .service(web::resource("/snapshots").route(web::post().to_async(install_snapshot_route)))
+                    .service(web::resource("/vote").route(web::post().to_async(vote_route)))
+            )
             // static resources
             .service( fs::Files::new("/static/", "static/"))
     })

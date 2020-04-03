@@ -16,19 +16,21 @@ use super::entities::*;
 
 // NodeInfoMessage > ChangeClusterMembershipResponse
 pub fn join_cluster_route(
-    join_req: web::Json<NodeInfoMessage>,
-    _req: HttpRequest,
+    body: web::Json<NodeInfoMessage>,
+    req: HttpRequest,
     _stream: web::Payload,
     srv: web::Data<Arc<ServerData>>,
-) ->  HttpResponse {
+) ->  impl Future<Item = HttpResponse, Error = Error> {
     //todo
-    info!("join cluster request:{:?}", join_req);
+    let nid = node_id_from_path(req).expect("valid numerical node id");
+
+    info!("join cluster request {:?}:{:?}", nid, body);
     // info!("got join request with id {:#?}", node_id);
     // srv.raft.do_send(ChangeRaftClusterConfig(vec![*node_id], vec![]));
     let resp = ChangeClusterMembershipResponse {
         response: Some(change_cluster_membership_response::Response::Result(
             ClusterMembershipChange {
-                node_id: join_req.node_id.clone(),
+                node_id: Some(super::entities::NodeId{ id: nid }),
                 action: MembershipAction::Added,
             }
         ))
@@ -36,16 +38,18 @@ pub fn join_cluster_route(
 
     info!("join cluster resp:{:?}", resp);
 
-    HttpResponse::Ok().json( resp )
+    future::ok( HttpResponse::Ok().json( resp ) )
 }
 
 // NodeIdMessage > ChangeClusterMembershipResponse
 pub fn leave_cluster_route(
     req: HttpRequest,
     _stream: web::Payload,
-    srv: web::Data<Arc<ServerData>>,
+    _srv: web::Data<Arc<ServerData>>,
 ) -> impl Future<Item = HttpResponse, Error = Error> {
     //todo
+    let nid = node_id_from_path(req).expect("valid numerical node id");
+    info!("leave cluster request {:?}", nid);
     future::ok(HttpResponse::Ok().json(()))
 }
 
@@ -53,10 +57,12 @@ pub fn leave_cluster_route(
 pub fn node_route(
     req: HttpRequest,
     _stream: web::Payload,
-    srv: web::Data<Arc<ServerData>>,
+    _srv: web::Data<Arc<ServerData>>,
 ) -> impl Future<Item = HttpResponse, Error = Error> {
     //todo
-    let nid = req.match_info().get("uid").unwrap_or("");
+    let nid = node_id_from_path(req).expect("valid numerical node id");
+
+    info!("get node info {:?}", nid);
 
     // srv.network
     //     .send(GetNode(uid.to_string()))
@@ -67,33 +73,84 @@ pub fn node_route(
 }
 
 // ClusterNodesRequest > ClusterNodesResponse
-pub fn nodes_route(
+pub fn all_nodes_route(
     _req: HttpRequest,
     _stream: web::Payload,
-    srv: web::Data<Arc<ServerData>>,
+    _srv: web::Data<Arc<ServerData>>,
 ) -> impl Future<Item = HttpResponse, Error = Error> {
     // srv.network
     //     .send(GetNodes)
     //     .map_err(Error::from)
     //     .and_then(|res| Ok(HttpResponse::Ok().json(res)))
     //todo
-    future::ok(HttpResponse::Ok().json(()))
+    info!("get all nodes");
+    let resp = ClusterNodesResponse {
+        nodes: std::collections::HashMap::<u64, NodeInfo>::new(),
+    };
+
+    future::ok(HttpResponse::Ok().json(resp))
 }
 
 // ClusterStateRequest > ClusterStateResponse
 pub fn state_route(
     _req: HttpRequest,
     _stream: web::Payload,
-    srv: web::Data<Arc<ServerData>>,
+    _srv: web::Data<Arc<ServerData>>,
 ) -> impl Future<Item = HttpResponse, Error = Error> {
     // srv.network
     //     .send(GetClusterState)
     //     .map_err(Error::from)
     //     .and_then(|res| Ok(HttpResponse::Ok().json(res)))
     //todo
+    info!("get cluster state");
     future::ok(HttpResponse::Ok().json(()))
 }
 
 // AppendEntries: RaftAppendEntriesRequest > RaftAppendEntriesResponse
+pub fn append_entries_route(
+    _body: web::Json<RaftAppendEntriesRequest>,
+    _req: HttpRequest,
+    _stream: web::Payload,
+    _srv: web::Data<Arc<ServerData>>,
+) ->  impl Future<Item = HttpResponse, Error = Error> {
+    info!("RAFT append entries");
+    future::ok( HttpResponse::Ok().json(()))
+}
+
 // InstallSnaphot: RaftInstallSnapshotRequest > RaftInstallSnapshotResponse
-// Note: RaftVoteRequest > RaftVoteResponse
+pub fn install_snapshot_route(
+    _body: web::Json<RaftInstallSnapshotRequest>,
+    _req: HttpRequest,
+    _stream: web::Payload,
+    _srv: web::Data<Arc<ServerData>>,
+) ->  impl Future<Item = HttpResponse, Error = Error> {
+    info!("RAFT install snapshot");
+    future::ok( HttpResponse::Ok().json(()))
+}
+
+// Vote: RaftVoteRequest > RaftVoteResponse
+pub fn vote_route(
+    body: web::Json<RaftVoteRequest>,
+    _req: HttpRequest,
+    _stream: web::Payload,
+    _srv: web::Data<Arc<ServerData>>,
+) ->  impl Future<Item = HttpResponse, Error = Error> {
+    info!("RAFT vote");
+
+    let vote_req = body.into_inner();
+
+    let resp = RaftVoteResponse {
+        term: vote_req.term,
+        vote_granted: false,
+        is_candidate_unknown: false,
+    };
+
+    future::ok( HttpResponse::Ok().json(resp))
+}
+
+fn node_id_from_path( req: HttpRequest ) -> Result<u64, std::num::ParseIntError> {
+    req.match_info()
+        .get("uid")
+        .unwrap_or("").trim()
+        .parse::<u64>()
+}
