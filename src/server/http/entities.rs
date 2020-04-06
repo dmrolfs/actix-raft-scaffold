@@ -48,11 +48,27 @@ pub struct NodeId {
     pub id: u64,
 }
 
+impl Into<actix_raft::NodeId> for NodeId {
+    fn into(self) -> actix_raft::NodeId {
+        self.id as actix_raft::NodeId
+    }
+}
+
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
 pub struct NodeInfo {
     pub ui_address: std::string::String,
     pub app_address: std::string::String,
     pub cluster_address: std::string::String,
+}
+
+impl Into<crate::NodeInfo> for NodeInfo {
+    fn into(self) -> crate::NodeInfo {
+        crate::NodeInfo {
+            cluster_addr: self.cluster_address,
+            app_addr: self.app_address,
+            ui_addr: self.ui_address,
+        }
+    }
 }
 
 /// Raft log entry.

@@ -12,7 +12,8 @@ use actix_raft::NodeId;
 use tracing::*;
 use crate::{fib::FibActor, server::ServerData};
 use super::entities::*;
-
+use crate::fib::Fibonacci;
+use crate::network::Join;
 
 // NodeInfoMessage > ChangeClusterMembershipResponse
 pub fn join_cluster_route(
@@ -22,23 +23,47 @@ pub fn join_cluster_route(
     srv: web::Data<Arc<ServerData>>,
 ) ->  impl Future<Item = HttpResponse, Error = Error> {
     //todo
-    let nid = node_id_from_path(req).expect("valid numerical node id");
+    let nid = node_id_from_path(&req).expect("valid numerical node id");
 
-    info!("join cluster request {:?}:{:?}", nid, body);
-    // info!("got join request with id {:#?}", node_id);
-    // srv.raft.do_send(ChangeRaftClusterConfig(vec![*node_id], vec![]));
-    let resp = ChangeClusterMembershipResponse {
-        response: Some(change_cluster_membership_response::Response::Result(
-            ClusterMembershipChange {
-                node_id: Some(super::entities::NodeId{ id: nid }),
-                action: MembershipAction::Added,
-            }
-        ))
+    if body.node_id.is_some() && body.node_id.unwrap().id != nid {
+        error!(
+            "Join Cluster Request body node_id {} does not match path {}, which is used",
+            body.node_id.unwrap().id, nid
+        );
+    }
+
+    info!("received join request for node {:?}:{:?}", nid, body);
+
+    let join = Join {
+        id: body.node_id.unwrap().into(),
+        info: body.node_info.as_ref().unwrap().clone().into(),
     };
 
-    info!("join cluster resp:{:?}", resp);
+    srv.network
+        .send( join )
+        .map_err( Error::from)
+        .and_then(move |res| {
+            info!("join result = {:?}", res);
+            info!("and now finding fibonacci...");
 
-    future::ok( HttpResponse::Ok().json( resp ) )
+            srv.fib
+                .send(Fibonacci( nid as u32 ))
+                .map_err(Error::from)
+                .and_then(move |res| {
+                    info!("fibonacci response: {:?}", res);
+                    let answer = res.unwrap();
+                    let resp = ChangeClusterMembershipResponse {
+                        response: Some(change_cluster_membership_response::Response::Result(
+                            ClusterMembershipChange {
+                                node_id: Some(super::entities::NodeId { id: answer }),
+                                action: MembershipAction::Added,
+                            }
+                        ))
+                    };
+
+                    Ok(HttpResponse::Ok().json(resp))
+                })
+        })
 }
 
 // NodeIdMessage > ChangeClusterMembershipResponse
@@ -48,7 +73,7 @@ pub fn leave_cluster_route(
     _srv: web::Data<Arc<ServerData>>,
 ) -> impl Future<Item = HttpResponse, Error = Error> {
     //todo
-    let nid = node_id_from_path(req).expect("valid numerical node id");
+    let nid = node_id_from_path(&req).expect("valid numerical node id");
     info!("leave cluster request {:?}", nid);
     future::ok(HttpResponse::Ok().json(()))
 }
@@ -60,7 +85,7 @@ pub fn node_route(
     _srv: web::Data<Arc<ServerData>>,
 ) -> impl Future<Item = HttpResponse, Error = Error> {
     //todo
-    let nid = node_id_from_path(req).expect("valid numerical node id");
+    let nid = node_id_from_path(&req).expect("valid numerical node id");
 
     info!("get node info {:?}", nid);
 
@@ -148,7 +173,7 @@ pub fn vote_route(
     future::ok( HttpResponse::Ok().json(resp))
 }
 
-fn node_id_from_path( req: HttpRequest ) -> Result<u64, std::num::ParseIntError> {
+fn node_id_from_path( req: &HttpRequest ) -> Result<u64, std::num::ParseIntError> {
     req.match_info()
         .get("uid")
         .unwrap_or("").trim()

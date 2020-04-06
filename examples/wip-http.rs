@@ -9,9 +9,11 @@ use tracing::*;
 use tracing_subscriber::fmt;
 use actix_raft_grpc::{
     fib::FibActor,
+    network::Network,
     server::ServerData,
     server::http::routes::*,
     server::http::entities::*,
+    utils,
 };
 
 
@@ -19,7 +21,7 @@ use actix_raft_grpc::{
 // async fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[actix_rt::main]
 async fn main() {
-    // env_logger::init();
+    env_logger::init();
     let subscriber = fmt::Subscriber::builder()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         // .with_env_filter( "wip=trace" )
@@ -38,8 +40,14 @@ async fn main() {
     let fib_arb = Arbiter::new();
     let fib_act = FibActor::new();
     let fib_addr = FibActor::start_in_arbiter(&fib_arb, |_| fib_act);
+
+    let node_id = utils::generate_node_id( "127.0.0.1:8080");
+    let network_arb = Arbiter::new();
+    let network_act = Network::new(node_id);
+    let network_addr = Network::start_in_arbiter(&network_arb, |_| network_act);
     let state = Arc::new( ServerData {
         fib: fib_addr,
+        network: network_addr,
     });
 
     let endpoint_address = "127.0.0.1:8080";
@@ -62,6 +70,7 @@ async fn main() {
             })))
             .service(
                 web::scope("/api/cluster")
+                    // .service( web::resource("/echo").to_async(echo))
                     .service(web::resource("/nodes").to_async(all_nodes_route))
                     .service(
                         web::resource("/nodes/{uid}")
@@ -84,3 +93,12 @@ async fn main() {
 
     let _ = system.run();
 }
+
+// pub fn echo(
+//     body: web::Json<NodeInfoMessage>,
+//     req: HttpRequest,
+//     _stream: web::Payload,
+//     srv: web::Data<Arc<ServerData>>,
+// ) ->  impl Future<Item = HttpResponse, Error = Error> {
+//     let body = req.
+// }
