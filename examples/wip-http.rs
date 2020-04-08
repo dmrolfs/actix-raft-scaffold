@@ -15,12 +15,12 @@ use actix_raft_grpc::{
     server::http::entities::*,
     utils,
 };
-
+use anyhow::{Result, Context};
 
 // #[tokio::main]
 // async fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[actix_rt::main]
-async fn main() {
+async fn main() -> Result<()> {
     env_logger::init();
     let subscriber = fmt::Subscriber::builder()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
@@ -28,7 +28,7 @@ async fn main() {
         .finish();
 
     tracing::subscriber::set_global_default(subscriber)
-        .expect("setting default subscriber failed");
+        .context("setting default subscriber failed");
 
     let span = span!( Level::INFO, "wip" );
     let _guard = span.enter();
@@ -92,6 +92,7 @@ async fn main() {
 
 
     let _ = system.run();
+    Ok(())
 }
 
 // pub fn echo(

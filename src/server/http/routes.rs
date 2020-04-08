@@ -1,16 +1,9 @@
 use std::sync::Arc;
-use std::fmt;
 use futures::{Future, future};
 use actix::prelude::*;
-use actix::Response;
-use actix_cors::Cors;
-use actix_files as fs;
-use actix_web::{
-    http::header, middleware::Logger, web, App, Error, HttpRequest, HttpResponse, HttpServer,
-};
-use actix_raft::NodeId;
+use actix_web::{web, Error, HttpRequest, HttpResponse};
 use tracing::*;
-use crate::{fib::FibActor, server::ServerData};
+use crate::server::ServerData;
 use super::entities::*;
 use crate::fib::Fibonacci;
 use crate::network::Join;
