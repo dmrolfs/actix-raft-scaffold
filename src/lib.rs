@@ -7,26 +7,50 @@ use serde::{Serialize, Deserialize};
 // }
 
 // pub mod cluster;
+pub mod config;
 pub mod fib;
 pub mod server;
 pub mod network;
+pub mod ring; //todo move into private and support tailoring via configuration
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct NodeInfo {
-    pub cluster_addr: String,
-    pub app_addr: String,
-    pub ui_addr: String,
+    name: String,
+    cluster_addr: String,
+    app_addr: String,
+    ui_addr: String,
 }
 
 impl Default for NodeInfo {
     fn default() -> Self {
         NodeInfo {
+            name: "".to_owned(),
             cluster_addr: "".to_owned(),
             app_addr: "".to_owned(),
             ui_addr: "".to_owned(),
         }
     }
 }
+
+pub type NodeList = Vec<NodeInfo>;
+
+// pub mod hash_ring {
+//     use std::sync::{Arc, RwLock};
+//     use hash_ring::HashRing;
+//     use actix_raft::NodeId;
+//
+//     pub type RingType = Arc<RwLock<HashRing<NodeId>>>;
+//
+//     pub struct Ring;
+//
+//     impl Ring {
+//         /// Creates a new has ring with the specified nodes.
+//         /// replicas is the number of virtual nodes each node has to increase the distribution.
+//         pub fn new(replicas: isize) -> RingType {
+//             Arc::new(RwLock::new(HashRing::new(Vec::new(), replicas)))
+//         }
+//     }
+// }
 
 pub mod utils {
     use crypto::digest::Digest;

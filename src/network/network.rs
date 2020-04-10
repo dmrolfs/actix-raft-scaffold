@@ -1,4 +1,5 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
+use std::net::SocketAddr;
 use actix::prelude::*;
 use actix_raft::{
     NodeId,
@@ -7,10 +8,18 @@ use actix_raft::{
 use serde::{Serialize, Deserialize, de::DeserializeOwned};
 use tracing::*;
 use crate::NodeInfo;
+use crate::ring::RingType;
+use super::node::*;
 
 pub struct Network {
     id: NodeId,
-    // nodes: BTreeMap<NodeId, Addr<Node>>,
+    info: NodeInfo,
+    discovery_socket_address: SocketAddr,
+    nodes: BTreeMap<NodeId, Addr<Node>>,
+    nodes_connected: HashSet<NodeId>,
+    pub isolated_nodes: HashSet<NodeId>,
+    ring: RingType,
+    metrics: Option<RaftMetrics>,
 }
 
 impl std::fmt::Debug for Network {
@@ -18,31 +27,57 @@ impl std::fmt::Debug for Network {
         write!(
             f,
             // "Network(id:{:?}, state:{:?}, net_type:{:?}, info:{:?}, nodes:{:?}, isolated_nodes:{:?}, metrics:{:?})",
-            "Network(id:{:?})",
+            "Network(id:{:?}, nodes:{:?}, isolated_nodes:{:?}, metrics:{:?}, discovery:{:?})",
             self.id,
-            // self.state,
-            // self.info,
-            // self.net_type,
-            // self.nodes_connected,
-            // self.isolated_nodes,
-            // self.metrics,
+            self.nodes_connected,
+            self.isolated_nodes,
+            self.metrics,
+            self.discovery_socket_address,
         )
     }
 }
 
 impl std::fmt::Display for Network {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Network({})", self.id)
+        write!(
+            f,
+            "Network(id:{:?}, nodes:{}, isolated_nodes:{}, metrics:{:?})",
+            self.id,
+            self.nodes_connected.len(),
+            self.isolated_nodes.len(),
+            self.metrics,
+        )
     }
 }
 
+// discovery_socket_address: SocketAddr,
+// nodes: BTreeMap<NodeId, Addr<Node>>,
+// nodes_connected: HashSet<NodeId>,
+// pub isolated_nodes: HashSet<NodeId>,
+// ring: RingType,
+// metrics: Option<RaftMetrics>,
+
 impl Network {
-    #[tracing::instrument]
-    pub fn new(
+    pub fn new<S>(
         id: NodeId,
-    ) -> Self {
+        info: NodeInfo,
+        ring: RingType,
+        discovery_address: S,
+    ) -> Self
+    where
+        S: AsRef<str> + std::fmt::Debug
+    {
+        let discovery = discovery_address.as_ref().parse::<SocketAddr>().unwrap();
+
         Network {
-            id
+            id,
+            info,
+            discovery_socket_address: discovery,
+            nodes: BTreeMap::new(),
+            nodes_connected: HashSet::new(),
+            isolated_nodes: HashSet::new(),
+            ring,
+            metrics: None,
         }
     }
 }

@@ -6,16 +6,19 @@ discovery_host = "127.0.0.1:8080"
 join_strategy = "static"
 
 [[nodes]]
+name = "node_a"
 cluster_addr = "127.0.0.1:8000"
 app_addr = "127.0.0.1:9000"
-public_addr = "127.0.0.1:8080"
+ui_addr = "127.0.0.1:8080"
 
 [[nodes]]
+name = "node_b"
 cluster_addr = "127.0.0.1:8001"
 app_addr = "127.0.0.1:9001"
-public_addr = "127.0.0.1:8081"
+ui_addr = "127.0.0.1:8081"
 
 [[nodes]]
+name = "node_c"
 cluster_addr = "127.0.0.1:8002"
 app_addr = "127.0.0.1:9002"
-public_addr = "127.0.0.1:8082"
+ui_addr = "127.0.0.1:8082"

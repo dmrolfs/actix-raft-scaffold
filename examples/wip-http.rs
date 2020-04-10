@@ -7,15 +7,17 @@ use actix_web::{
 };
 use tracing::*;
 use tracing_subscriber::fmt;
+use anyhow::{Result, Context};
 use actix_raft_grpc::{
+    NodeInfo,
     fib::FibActor,
+    ring::Ring,
     network::Network,
     server::ServerData,
     server::http::routes::*,
     server::http::entities::*,
     utils,
 };
-use anyhow::{Result, Context};
 
 // #[tokio::main]
 // async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -33,6 +35,10 @@ async fn main() -> Result<()> {
     let span = span!( Level::INFO, "wip" );
     let _guard = span.enter();
 
+    let c = actix_raft_grpc::config::Configuration::load();
+    warn!("CONFIGURATION = {:?}", c);
+
+
     // let addr = "[::1]:10000".parse().unwrap();
     // info!("RouteGuideServer listening on: {}", addr);
 
@@ -41,9 +47,16 @@ async fn main() -> Result<()> {
     let fib_act = FibActor::new();
     let fib_addr = FibActor::start_in_arbiter(&fib_arb, |_| fib_act);
 
+    let ring = Ring::new(10);
+
     let node_id = utils::generate_node_id( "127.0.0.1:8080");
     let network_arb = Arbiter::new();
-    let network_act = Network::new(node_id);
+    let network_act = Network::new(
+        node_id,
+        NodeInfo::default(),
+        ring,
+        "127.0.0.1:8080",
+    );
     let network_addr = Network::start_in_arbiter(&network_arb, |_| network_act);
     let state = Arc::new( ServerData {
         fib: fib_addr,
