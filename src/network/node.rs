@@ -25,6 +25,7 @@ pub enum NodeError {
     Unknown,
 }
 
+#[derive(Clone)]
 pub struct NodeRef {
     pub id: NodeId,
     pub info: NodeInfo,
@@ -33,7 +34,7 @@ pub struct NodeRef {
 
 impl std::fmt::Debug for NodeRef {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "NodeRef(id:{}, info:{:?})", self.id, self.info)
+        write!(f, "NodeRef(id:{}, info:{:?}, started:{})", self.id, self.info, self.addr.is_some())
     }
 }
 
@@ -57,7 +58,7 @@ impl LocalNode {
 }
 
 impl std::fmt::Display for LocalNode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "Local") }
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "LocalNode") }
 }
 
 impl ProximityBehavior for LocalNode {}
@@ -195,8 +196,8 @@ impl Actor for Node {
     type Context = Context<Self>;
 
     fn started(&mut self, ctx: &mut Self::Context) {
-        info!("Node #{} is connecting.", self.id);
-        unimplemented!()
+        info!("Node #{} is starting.", self.id);
+        // unimplemented!()
     }
 
     fn stopping(&mut self, ctx: &mut Self::Context) -> Running {
