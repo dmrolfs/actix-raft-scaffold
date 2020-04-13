@@ -4,7 +4,7 @@ use tracing::*;
 use tracing_subscriber::fmt;
 // use actix_raft_grpc::cluster::ClusterService;
 // use actix_raft_grpc::fib::FibActor;
-use actix_raft_grpc::server::Server;
+use actix_raft_grpc::ports::Server;
 
 // #[tokio::main]
 // async fn main() -> Result<(), Box<dyn std::error::Error>> {

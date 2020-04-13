@@ -1,24 +1,19 @@
-max_discovery_timeout = 5
-max_raft_init_timeout = 5
-
-host = "127.0.0.1:8000"
-discovery_host = "127.0.0.1:8080"
-join_strategy = "static"
+#host = "127.0.0.1:8000"
 
 [[nodes]]
 name = "node_a"
-cluster_addr = "127.0.0.1:8000"
-app_addr = "127.0.0.1:9000"
-ui_addr = "127.0.0.1:8080"
+cluster_address = "127.0.0.1:8000"
+app_address = "127.0.0.1:9000"
+ui_address = "127.0.0.1:8080"
 
 [[nodes]]
 name = "node_b"
-cluster_addr = "127.0.0.1:8001"
-app_addr = "127.0.0.1:9001"
-ui_addr = "127.0.0.1:8081"
+cluster_address = "127.0.0.1:8001"
+app_address = "127.0.0.1:9001"
+ui_address = "127.0.0.1:8081"
 
 [[nodes]]
 name = "node_c"
-cluster_addr = "127.0.0.1:8002"
-app_addr = "127.0.0.1:9002"
-ui_addr = "127.0.0.1:8082"
+cluster_address = "127.0.0.1:8002"
+app_address = "127.0.0.1:9002"
+ui_address = "127.0.0.1:8082"

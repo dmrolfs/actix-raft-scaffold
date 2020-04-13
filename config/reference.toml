@@ -1,0 +1,6 @@
+discovery_host_address = "127.0.0.1:8080"
+join_strategy = "static"
+ring_replicas = 10
+max_discovery_timeout = 5
+max_raft_init_timeout = 5
+

@@ -3,7 +3,7 @@ use futures::{Future, future};
 use actix::prelude::*;
 use actix_web::{web, Error, HttpRequest, HttpResponse};
 use tracing::*;
-use crate::server::ServerData;
+use crate::ports::PortData;
 use super::entities::*;
 use crate::fib::Fibonacci;
 use crate::network::Join;
@@ -13,7 +13,7 @@ pub fn join_cluster_route(
     body: web::Json<NodeInfoMessage>,
     req: HttpRequest,
     _stream: web::Payload,
-    srv: web::Data<Arc<ServerData>>,
+    srv: web::Data<Arc<PortData>>,
 ) ->  impl Future<Item = HttpResponse, Error = Error> {
     //todo
     let nid = node_id_from_path(&req).expect("valid numerical node id");
@@ -63,7 +63,7 @@ pub fn join_cluster_route(
 pub fn leave_cluster_route(
     req: HttpRequest,
     _stream: web::Payload,
-    _srv: web::Data<Arc<ServerData>>,
+    _srv: web::Data<Arc<PortData>>,
 ) -> impl Future<Item = HttpResponse, Error = Error> {
     //todo
     let nid = node_id_from_path(&req).expect("valid numerical node id");
@@ -75,7 +75,7 @@ pub fn leave_cluster_route(
 pub fn node_route(
     req: HttpRequest,
     _stream: web::Payload,
-    _srv: web::Data<Arc<ServerData>>,
+    _srv: web::Data<Arc<PortData>>,
 ) -> impl Future<Item = HttpResponse, Error = Error> {
     //todo
     let nid = node_id_from_path(&req).expect("valid numerical node id");
@@ -94,7 +94,7 @@ pub fn node_route(
 pub fn all_nodes_route(
     _req: HttpRequest,
     _stream: web::Payload,
-    _srv: web::Data<Arc<ServerData>>,
+    _srv: web::Data<Arc<PortData>>,
 ) -> impl Future<Item = HttpResponse, Error = Error> {
     // srv.network
     //     .send(GetNodes)
@@ -113,7 +113,7 @@ pub fn all_nodes_route(
 pub fn state_route(
     _req: HttpRequest,
     _stream: web::Payload,
-    _srv: web::Data<Arc<ServerData>>,
+    _srv: web::Data<Arc<PortData>>,
 ) -> impl Future<Item = HttpResponse, Error = Error> {
     // srv.network
     //     .send(GetClusterState)
@@ -129,7 +129,7 @@ pub fn append_entries_route(
     _body: web::Json<RaftAppendEntriesRequest>,
     _req: HttpRequest,
     _stream: web::Payload,
-    _srv: web::Data<Arc<ServerData>>,
+    _srv: web::Data<Arc<PortData>>,
 ) ->  impl Future<Item = HttpResponse, Error = Error> {
     info!("RAFT append entries");
     future::ok( HttpResponse::Ok().json(()))
@@ -140,7 +140,7 @@ pub fn install_snapshot_route(
     _body: web::Json<RaftInstallSnapshotRequest>,
     _req: HttpRequest,
     _stream: web::Payload,
-    _srv: web::Data<Arc<ServerData>>,
+    _srv: web::Data<Arc<PortData>>,
 ) ->  impl Future<Item = HttpResponse, Error = Error> {
     info!("RAFT install snapshot");
     future::ok( HttpResponse::Ok().json(()))
@@ -151,7 +151,7 @@ pub fn vote_route(
     body: web::Json<RaftVoteRequest>,
     _req: HttpRequest,
     _stream: web::Payload,
-    _srv: web::Data<Arc<ServerData>>,
+    _srv: web::Data<Arc<PortData>>,
 ) ->  impl Future<Item = HttpResponse, Error = Error> {
     info!("RAFT vote");
 

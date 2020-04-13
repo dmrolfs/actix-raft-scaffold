@@ -7,27 +7,30 @@ use serde::{Serialize, Deserialize};
 // }
 
 // pub mod cluster;
-pub mod config;
+mod config;
+pub mod raft_system;
 pub mod fib;
-pub mod server;
+pub mod ports;
 pub mod network;
 pub mod ring; //todo move into private and support tailoring via configuration
+
+pub use self::config::{Configuration, ConfigurationError, JoinStrategy};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct NodeInfo {
     name: String,
-    cluster_addr: String,
-    app_addr: String,
-    ui_addr: String,
+    cluster_address: String,
+    app_address: String,
+    ui_address: String,
 }
 
 impl Default for NodeInfo {
     fn default() -> Self {
         NodeInfo {
             name: "".to_owned(),
-            cluster_addr: "".to_owned(),
-            app_addr: "".to_owned(),
-            ui_addr: "".to_owned(),
+            cluster_address: "".to_owned(),
+            app_address: "".to_owned(),
+            ui_address: "".to_owned(),
         }
     }
 }

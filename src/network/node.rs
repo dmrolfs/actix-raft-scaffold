@@ -4,6 +4,7 @@ use actix_raft::NodeId;
 use serde::{Serialize, de::DeserializeOwned};
 use thiserror::Error;
 use tracing::*;
+use crate::NodeInfo;
 
 
 #[derive(Debug, PartialEq)]
@@ -24,6 +25,17 @@ pub enum NodeError {
     Unknown,
 }
 
+pub struct NodeRef {
+    pub id: NodeId,
+    pub info: NodeInfo,
+    pub addr: Option<Addr<Node>>,
+}
+
+impl std::fmt::Debug for NodeRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "NodeRef(id:{}, info:{:?})", self.id, self.info)
+    }
+}
 
 trait ChangeCluster {
     fn change_cluster_config(

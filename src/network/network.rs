@@ -1,25 +1,47 @@
 use std::collections::{BTreeMap, HashSet};
 use std::net::SocketAddr;
+use std::sync::Arc;
 use actix::prelude::*;
+use actix_server::Server;
 use actix_raft::{
     NodeId,
     metrics::RaftMetrics,
 };
 use serde::{Serialize, Deserialize, de::DeserializeOwned};
+use thiserror::Error;
 use tracing::*;
-use crate::NodeInfo;
-use crate::ring::RingType;
-use super::node::*;
+use crate::{
+    Configuration,
+    NodeInfo,
+    ring::RingType,
+    ports::{self, PortData},
+    utils,
+};
+use super::{
+    NetworkState,
+    node::*
+};
+
+#[derive(Error, Debug)]
+pub enum NetworkError {
+    #[error("failed to bind network endpoint")]
+    NetworkBindError(#[from] ports::PortError),
+
+    #[error("unknown network error")]
+    Unknown,
+}
 
 pub struct Network {
     id: NodeId,
     info: NodeInfo,
-    discovery_socket_address: SocketAddr,
-    nodes: BTreeMap<NodeId, Addr<Node>>,
+    state: NetworkState,
+    discovery: SocketAddr,
+    nodes: BTreeMap<NodeId, NodeRef>,
     nodes_connected: HashSet<NodeId>,
     pub isolated_nodes: HashSet<NodeId>,
     ring: RingType,
     metrics: Option<RaftMetrics>,
+    server: Option<Server>,
 }
 
 impl std::fmt::Debug for Network {
@@ -32,52 +54,50 @@ impl std::fmt::Debug for Network {
             self.nodes_connected,
             self.isolated_nodes,
             self.metrics,
-            self.discovery_socket_address,
+            self.discovery,
         )
     }
 }
 
 impl std::fmt::Display for Network {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "Network(id:{:?}, nodes:{}, isolated_nodes:{}, metrics:{:?})",
-            self.id,
-            self.nodes_connected.len(),
-            self.isolated_nodes.len(),
-            self.metrics,
-        )
+        write!(f, "Network(id:{})", self.id, )
     }
 }
 
-// discovery_socket_address: SocketAddr,
-// nodes: BTreeMap<NodeId, Addr<Node>>,
-// nodes_connected: HashSet<NodeId>,
-// pub isolated_nodes: HashSet<NodeId>,
-// ring: RingType,
-// metrics: Option<RaftMetrics>,
-
 impl Network {
-    pub fn new<S>(
+    pub fn new(
         id: NodeId,
-        info: NodeInfo,
+        info: &NodeInfo,
         ring: RingType,
-        discovery_address: S,
-    ) -> Self
-    where
-        S: AsRef<str> + std::fmt::Debug
-    {
-        let discovery = discovery_address.as_ref().parse::<SocketAddr>().unwrap();
-
+        discovery: SocketAddr,
+    ) -> Self {
         Network {
             id,
-            info,
-            discovery_socket_address: discovery,
+            info: info.clone(),
+            state: NetworkState::Initialized,
+            discovery,
             nodes: BTreeMap::new(),
             nodes_connected: HashSet::new(),
             isolated_nodes: HashSet::new(),
             ring,
             metrics: None,
+            server: None,
+        }
+    }
+
+    #[tracing::instrument]
+    pub fn configure_with(&mut self, c: &Configuration) {
+        for n in c.nodes.values() {
+            let id = utils::generate_node_id(n.cluster_address.as_str());
+            let node_ref = NodeRef {
+                id,
+                info: n.clone(),
+                addr: None
+            };
+            info!("configuring node ref:{:?}", node_ref);
+
+            self.nodes.insert(id, node_ref);
         }
     }
 }
@@ -89,6 +109,32 @@ impl Actor for Network {
     fn started(&mut self, ctx: &mut Self::Context) {
         //todo: create LocalNode for this id and push into nodes_connected;
         info!("starting Network actor for node: {}", self.id);
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct BindEndpoint {
+    data: PortData
+}
+
+impl BindEndpoint {
+    pub fn new(data: PortData) -> Self { BindEndpoint { data } }
+}
+
+impl Message for BindEndpoint {
+    type Result = Result<(), NetworkError>;
+}
+
+impl Handler<BindEndpoint> for Network {
+    type Result = Result<(), NetworkError>;
+    // type Result = ResponseActFuture<Self, (), NetworkError>;
+
+    fn handle(&mut self, bind: BindEndpoint, ctx: &mut Self::Context) -> Self::Result {
+        info!("{} binding to http endpoint: {}...", self, self.info.cluster_address);
+        let server = ports::http::start_server(self.info.cluster_address.as_str(), bind.data)?;
+        info!("{} http endpoint: {} started.", self, self.info.cluster_address);
+        self.server = Some(server);
+        Ok(())
     }
 }
 
@@ -109,7 +155,7 @@ impl Handler<Join> for Network {
 
     #[tracing::instrument]
     fn handle(&mut self, msg: Join, ctx: &mut Self::Context) -> Self::Result {
-        info!("{} handling Join request...", self);
+        info!("handling Join request...");
         let change = ChangeClusterConfig { to_add: vec![msg.id], to_remove: vec![], };
         //todo: find leader node
         //todo: send change to leader node

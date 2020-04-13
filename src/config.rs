@@ -20,12 +20,6 @@ pub enum ConfigurationError {
     Unknown,
 }
 
-// impl From<config::error::ConfigError> for ConfigurationError {
-//     fn from(err: ConfigError) -> Self {
-//         unimplemented!()
-//     }
-// }
-
 #[derive(StructOpt, Debug)]
 #[structopt(name="actix-raft-seed")]
 pub struct Opt {
@@ -46,17 +40,51 @@ pub enum JoinStrategy {
 
 #[derive(Deserialize, Debug, Clone)]
 struct ConfigSchema {
-    pub discovery_host: String,
+    pub discovery_host_address: String,
     pub join_strategy: JoinStrategy,
+    pub ring_replicas: isize,
     pub nodes: NodeList
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Configuration {
-    host: String,
-    discovery_host: SocketAddr,
-    join_strategy: JoinStrategy,
-    nodes: HashMap<String, NodeInfo>,
+    pub host: String,
+    pub discovery_host: SocketAddr,
+    pub join_strategy: JoinStrategy,
+    pub ring_replicas: isize,
+    pub nodes: HashMap<String, NodeInfo>,
+}
+
+impl Configuration {
+    pub fn host_info(&self) -> NodeInfo {
+        self.nodes
+            .get(&self.host)
+            .expect("host node not configured")
+            .clone()
+    }
+}
+
+impl From<ConfigSchema> for Configuration {
+    #[tracing::instrument]
+    fn from(schema: ConfigSchema) -> Self {
+        info!("Actuator configuration: {:?}", schema);
+
+        let discovery = schema.discovery_host_address.parse::<SocketAddr>()
+            .expect("failed to parse discovery host socket address");
+
+        let nodes = schema.nodes.iter()
+            .map(|n| (n.name.clone(), n.clone()))
+            .into_iter()
+            .collect();
+
+        Configuration {
+            host: "".to_owned(),
+            discovery_host: discovery,
+            join_strategy: schema.join_strategy,
+            ring_replicas: schema.ring_replicas,
+            nodes,
+        }
+    }
 }
 
 impl Configuration {
@@ -86,21 +114,9 @@ impl Configuration {
             .try_into::<ConfigSchema>()
             .map_err(|err| err.into())
             .map(|schema| {
-                info!("Actuator configuration: {:?}", schema);
-
-                let discovery = schema.discovery_host.parse::<SocketAddr>()
-                    .expect("failed to parse discovery host socket address");
-
-                let nodes = schema.nodes.iter()
-                    .map(|n| (n.name.clone(), n.clone()))
-                    .into_iter()
-                    .collect();
-
                 Configuration {
                     host: opt.host.to_owned(),
-                    discovery_host: discovery,
-                    join_strategy: schema.join_strategy,
-                    nodes,
+                    ..schema.into()
                 }
             })
     }

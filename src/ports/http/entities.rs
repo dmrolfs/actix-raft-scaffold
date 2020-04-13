@@ -65,9 +65,9 @@ impl Into<crate::NodeInfo> for NodeInfo {
     fn into(self) -> crate::NodeInfo {
         crate::NodeInfo {
             name: "".to_owned(),
-            cluster_addr: self.cluster_address,
-            app_addr: self.app_address,
-            ui_addr: self.ui_address,
+            cluster_address: self.cluster_address,
+            app_address: self.app_address,
+            ui_address: self.ui_address,
         }
     }
 }
