@@ -21,15 +21,43 @@ use super::{
     NetworkState,
     node::*
 };
+use tokio::timer::Delay;
+use std::time::{Instant, Duration};
+use crate::network::NetworkError::NetworkBindError;
 
 #[derive(Error, Debug)]
 pub enum NetworkError {
     #[error("failed to bind network endpoint")]
     NetworkBindError(#[from] ports::PortError),
 
-    #[error("unknown network error")]
-    Unknown,
+    #[error("error in delay time {0}")]
+    DelayError(#[from] tokio::timer::Error),
+
+    #[error("error in actor mailbox {0}")]
+    ActorMailBoxError(#[from] actix::MailboxError),
+
+    #[error("unknown network error {0}")]
+    Unknown(String),
 }
+
+
+// impl Network {
+//     fn self_send_after_delay<M>(&mut self, msg: M, delay: Duration, ctx: &mut Self::Context) -> actix::MessageResponse<Self, M>
+//     where
+//         M: Message,
+//     {
+//         Box::new(
+//             fut::wrap_future::<_, Self>( Delay::new(Instant::now() + delay))
+//                 .map_err(|err, _, _| NetworkError::from(err))
+//                 .and_then( move |_, _, ctx| {
+//                     fut::wrap_future::<_, Self>(ctx.address().send(msg))
+//                         .map_err(|err, _, _| NetworkError::from(err))
+//                         .and_then(|res, _, _| fut::result(res))
+//                 })
+//         )
+//     }
+// }
+
 
 pub struct Network {
     id: NodeId,
@@ -120,7 +148,10 @@ impl Network {
 
             match self.nodes.get_mut(&node_id) {
                 Some(nref) => nref,
-                None => return Err(NetworkError::Unknown),
+                None => {
+                    let err_msg = format!("No node#{} registered in Network#{}.", node_id, self.id);
+                    return Err(NetworkError::Unknown(err_msg))
+                },
             }
         };
         debug!(network_id = self.id, "Registering node {:?}...", &node_ref);
@@ -175,6 +206,23 @@ impl Actor for Network {
     }
 }
 
+impl Handler<RaftMetrics> for Network {
+    type Result = ();
+
+    fn handle(&mut self, msg: RaftMetrics, _ctx: &mut Self::Context) -> Self::Result {
+        debug!(
+            network_id = self.id,
+            "RAFT node={} state={:?} leader={:?} term={} index={} applied={} cfg={{join={} members={:?} non_voters={:?} removing={:?}}}",
+            msg.id, msg.state, msg.current_leader, msg.current_term, msg.last_log_index,
+            msg.last_applied, msg.membership_config.is_in_joint_consensus,
+            msg.membership_config.members, msg.membership_config.non_voters,
+            msg.membership_config.removing,
+        );
+
+        self.metrics = Some(msg);
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct BindEndpoint {
     data: PortData
@@ -202,6 +250,139 @@ impl Handler<BindEndpoint> for Network {
     }
 }
 
+// #[derive(Debug)]
+// pub struct GetNode{
+// cluster_address or node_id???
+//     pub node_id: NodeId,
+// }
+//
+// impl GetNode {
+//     pub fn new(id: NodeId) -> Self { GetNode { node_id: id, }
+// }
+//
+// impl Message for GetNode {
+//     type Result = Result<(NodeId, String), NetworkError>;
+// }
+//
+// impl Handler<GetNode> for Network {
+//     type Result = Result<(NodeId, String), NetworkError>;
+//
+//     fn handle(&mut self, msg: GetNode, ctx: &mut Self::Context) -> Self::Result {
+//         let ring = self.ring.read()?;
+//         let node_id = ring.get_node(msg.cluster_address).unwrap();
+//         // let default_info = ;
+//         let node = self.nodes
+//             .get(node_id)
+//             .map(|r| r.info)
+//             .unwrap_or(NodeInfo::default());
+//
+//         Ok((*node_id, node.public_address.to_owned()))
+//     }
+// }
+
+// GetCurrentLeader //////////////////////////////////////////////////////////
+/// Get the current leader of the cluster from the perspective of the Raft metrics.
+///
+/// A return value of Ok(None) indicates that the current leader is unknown or the cluster hasn't
+/// come to consensus on the leader yet.
+#[derive(Debug, Clone)]
+pub struct GetCurrentLeader {
+    attempts: u8,
+}
+
+impl GetCurrentLeader {
+    pub fn new() -> Self { GetCurrentLeader::default() }
+
+    pub fn attempts_remaining(&self) -> u8 { self.attempts }
+
+    pub fn retry(self) -> Result<GetCurrentLeader, ()> {
+        if 0 < self.attempts {
+            Ok(GetCurrentLeader {
+                attempts: self.attempts - 1,
+            })
+        } else {
+            Err(())
+        }
+    }
+}
+
+impl Default for GetCurrentLeader {
+    fn default() -> Self {
+        GetCurrentLeader {
+            attempts: 3,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct CurrentLeader(Option<NodeId>);
+
+impl std::fmt::Display for CurrentLeader {
+    fn fmt(&self, f:&mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let leader = match self.0 {
+            Some(nid) => format!("#{}", nid),
+            None => "No consensus".to_string(),
+        };
+
+        write!(f, "CurrentLeader({})", leader)
+    }
+}
+
+impl Message for GetCurrentLeader {
+    type Result = Result<CurrentLeader, NetworkError>;
+}
+
+impl Handler<GetCurrentLeader> for Network {
+    type Result = ResponseActFuture<Self, CurrentLeader, NetworkError>;
+
+    #[tracing::instrument(skip(self,ctx))]
+    fn handle(&mut self, msg: GetCurrentLeader, ctx: &mut Self::Context) -> Self::Result {
+        if let Some(ref mut metrics) = self.metrics {
+            if let Some(leader) = metrics.current_leader {
+                Box::new(fut::result(Ok(CurrentLeader(Some(leader)))))
+            } else {
+                Box::new(
+                    fut::wrap_future::<_, Self>( Delay::new(Instant::now() + Duration::from_secs(1)))
+                        .map_err(|err, _, _| NetworkError::from(err))
+                        .and_then(move |_, _, ctx| {
+                            let msg_retry = msg.clone().retry().unwrap();
+                            fut::wrap_future::<_, Self>(ctx.address().send(msg_retry))
+                                .map_err(|err, _, _| NetworkError::from(err))
+                                .and_then(|res, _, _| fut::result(res))
+                        })
+                )
+            }
+        } else {
+            Box::new(
+                fut::wrap_future::<_, Self>(Delay::new(Instant::now() + Duration::from_secs(1)))
+                    .map_err(|err, _, _| NetworkError::from(err))
+                    .and_then(move |_, _, ctx| {
+                        let msg_retry = msg.clone().retry().unwrap();
+                        fut::wrap_future::<_, Self>(ctx.address().send(msg_retry))
+                            .map_err(|err, _, _| NetworkError::from(err))
+                            .and_then(|res, _, _| fut::result(res))
+                    })
+            )
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct GetClusterState;
+
+impl Message for GetClusterState {
+    type Result = Result<NetworkState, NetworkError>;
+}
+
+impl Handler<GetClusterState> for Network {
+    type Result = Result<NetworkState, NetworkError>;
+
+    #[tracing::instrument]
+    fn handle(&mut self, msg: GetClusterState, _ctx: &mut Self::Context) -> Self::Result {
+        Ok(self.state.clone())
+    }
+}
+
 #[derive(Message, Debug)]
 pub struct Join {
     pub id: NodeId,
@@ -222,6 +403,7 @@ impl Handler<Join> for Network {
         info!(network_id = self.id, "handling Join request...");
         let change = ChangeClusterConfig { to_add: vec![msg.id], to_remove: vec![], };
         //todo: find leader node
+        //todo: determine network state based on # nodes connected (0=>initialize, 1=>SingleNode, +=>Clustered)
         //todo: send change to leader node
         //todo: and_then register_node( msg.id, msg.info, ctx.address() )
     }

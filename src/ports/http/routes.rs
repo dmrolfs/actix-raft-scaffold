@@ -2,11 +2,12 @@ use std::sync::Arc;
 use futures::{Future, future};
 use actix::prelude::*;
 use actix_web::{web, Error, HttpRequest, HttpResponse};
+use actix_web::http::StatusCode;
 use tracing::*;
 use crate::ports::PortData;
 use super::entities::*;
 use crate::fib::Fibonacci;
-use crate::network::Join;
+use crate::network::{Join, GetClusterState};
 
 // NodeInfoMessage > ChangeClusterMembershipResponse
 pub fn join_cluster_route(
@@ -75,13 +76,15 @@ pub fn leave_cluster_route(
 pub fn node_route(
     req: HttpRequest,
     _stream: web::Payload,
-    _srv: web::Data<Arc<PortData>>,
+    srv: web::Data<Arc<PortData>>,
 ) -> impl Future<Item = HttpResponse, Error = Error> {
     //todo
     let nid = node_id_from_path(&req).expect("valid numerical node id");
 
     info!("get node info {:?}", nid);
 
+    // srv.network
+    //     .send( GetNode::new(nid.to_string))
     // srv.network
     //     .send(GetNode(uid.to_string()))
     //     .map_err(Error::from)
@@ -110,18 +113,27 @@ pub fn all_nodes_route(
 }
 
 // ClusterStateRequest > ClusterStateResponse
+#[tracing::instrument(skip(_stream, srv))]
 pub fn state_route(
     _req: HttpRequest,
     _stream: web::Payload,
-    _srv: web::Data<Arc<PortData>>,
+    srv: web::Data<Arc<PortData>>,
 ) -> impl Future<Item = HttpResponse, Error = Error> {
-    // srv.network
-    //     .send(GetClusterState)
-    //     .map_err(Error::from)
-    //     .and_then(|res| Ok(HttpResponse::Ok().json(res)))
-    //todo
-    info!("get cluster state");
-    future::ok(HttpResponse::Ok().json(()))
+    srv.network
+        .send(GetClusterState)
+        .map_err(|err| actix_web::error::ErrorInternalServerError(err))
+        .and_then(|res| match res {
+            Ok(res) => Ok(HttpResponse::Ok().json(res)),
+            Err(err) => {Err(
+                actix_web::error::ErrorInternalServerError(err)
+            )},
+        })
+
+
+            // Ok(HttpResponse::Ok().json(res)))
+    // //todo
+    // info!("get cluster state");
+    // future::ok(HttpResponse::Ok().json(()))
 }
 
 // AppendEntries: RaftAppendEntriesRequest > RaftAppendEntriesResponse

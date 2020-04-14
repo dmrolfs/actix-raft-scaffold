@@ -67,7 +67,7 @@ impl Into<crate::NodeInfo> for NodeInfo {
             name: "".to_owned(),
             cluster_address: self.cluster_address,
             app_address: self.app_address,
-            ui_address: self.ui_address,
+            public_address: self.ui_address,
         }
     }
 }

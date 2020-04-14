@@ -4,16 +4,16 @@
 name = "node_a"
 cluster_address = "127.0.0.1:8000"
 app_address = "127.0.0.1:9000"
-ui_address = "127.0.0.1:8080"
+public_address = "127.0.0.1:8080"
 
 [[nodes]]
 name = "node_b"
 cluster_address = "127.0.0.1:8001"
 app_address = "127.0.0.1:9001"
-ui_address = "127.0.0.1:8081"
+public_address = "127.0.0.1:8081"
 
 [[nodes]]
 name = "node_c"
 cluster_address = "127.0.0.1:8002"
 app_address = "127.0.0.1:9002"
-ui_address = "127.0.0.1:8082"
+public_address = "127.0.0.1:8082"

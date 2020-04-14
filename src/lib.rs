@@ -21,7 +21,7 @@ pub struct NodeInfo {
     name: String,
     cluster_address: String,
     app_address: String,
-    ui_address: String,
+    public_address: String,
 }
 
 impl Default for NodeInfo {
@@ -30,7 +30,7 @@ impl Default for NodeInfo {
             name: "".to_owned(),
             cluster_address: "".to_owned(),
             app_address: "".to_owned(),
-            ui_address: "".to_owned(),
+            public_address: "".to_owned(),
         }
     }
 }
