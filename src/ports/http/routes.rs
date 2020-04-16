@@ -1,13 +1,11 @@
 use std::sync::Arc;
 use futures::{Future, future};
-use actix::prelude::*;
 use actix_web::{web, Error, HttpRequest, HttpResponse};
-use actix_web::http::StatusCode;
 use tracing::*;
 use crate::ports::PortData;
 use super::entities::*;
 use crate::fib::Fibonacci;
-use crate::network::{Join, GetClusterState};
+use crate::network::{Join, GetClusterSummary};
 
 // NodeInfoMessage > ChangeClusterMembershipResponse
 pub fn join_cluster_route(
@@ -76,7 +74,7 @@ pub fn leave_cluster_route(
 pub fn node_route(
     req: HttpRequest,
     _stream: web::Payload,
-    srv: web::Data<Arc<PortData>>,
+    _srv: web::Data<Arc<PortData>>,
 ) -> impl Future<Item = HttpResponse, Error = Error> {
     //todo
     let nid = node_id_from_path(&req).expect("valid numerical node id");
@@ -120,7 +118,7 @@ pub fn state_route(
     srv: web::Data<Arc<PortData>>,
 ) -> impl Future<Item = HttpResponse, Error = Error> {
     srv.network
-        .send(GetClusterState)
+        .send(GetClusterSummary)
         .map_err(|err| actix_web::error::ErrorInternalServerError(err))
         .and_then(|res| match res {
             Ok(res) => Ok(HttpResponse::Ok().json(res)),

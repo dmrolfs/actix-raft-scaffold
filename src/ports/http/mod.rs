@@ -1,12 +1,9 @@
 use std::sync::Arc;
 use actix_server::Server;
 use actix_cors::Cors;
-use actix_web::{
-    http::header, middleware::Logger, web, App, Error, HttpServer, HttpRequest, HttpResponse
-};
+use actix_web::{http::header, middleware::Logger, web, App, HttpServer};
 use super::{PortData, PortError};
 use self::routes::*;
-use self::entities::*;
 
 pub mod routes;
 pub mod entities;

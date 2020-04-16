@@ -1,7 +1,6 @@
 use actix::prelude::*;
 use actix_web::client::Client;
 use actix_raft::NodeId;
-use serde::{Serialize, de::DeserializeOwned};
 use thiserror::Error;
 use tracing::*;
 use crate::NodeInfo;
@@ -71,7 +70,7 @@ impl ChangeCluster for LocalNode {
         to_remove: Vec<NodeId>,
         ctx: &<Node as Actor>::Context
     ) -> Result<(), NodeError> {
-        let node_addr = ctx.address();
+        let _node_addr = ctx.address();
 
         unimplemented!()
     }
@@ -195,13 +194,15 @@ impl std::fmt::Debug for Node {
 impl Actor for Node {
     type Context = Context<Self>;
 
-    fn started(&mut self, ctx: &mut Self::Context) {
+    fn started(&mut self, _ctx: &mut Self::Context) {
         info!("Node #{} is starting.", self.id);
+        WORK HERE
         // unimplemented!()
     }
 
-    fn stopping(&mut self, ctx: &mut Self::Context) -> Running {
-        unimplemented!()
+    fn stopping(&mut self, _ctx: &mut Self::Context) -> Running {
+        warn!("Node #{} is stopping.", self.id);
+        Running::Stop
     }
 }
 

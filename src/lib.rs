@@ -7,7 +7,7 @@ use serde::{Serialize, Deserialize};
 // }
 
 // pub mod cluster;
-mod config;
+pub mod config;
 pub mod raft_system;
 pub mod fib;
 pub mod ports;
@@ -18,10 +18,10 @@ pub use self::config::{Configuration, ConfigurationError, JoinStrategy};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct NodeInfo {
-    name: String,
-    cluster_address: String,
-    app_address: String,
-    public_address: String,
+    pub name: String,
+    pub cluster_address: String,
+    pub app_address: String,
+    pub public_address: String,
 }
 
 impl Default for NodeInfo {
@@ -32,6 +32,17 @@ impl Default for NodeInfo {
             app_address: "".to_owned(),
             public_address: "".to_owned(),
         }
+    }
+}
+
+impl Into<std::collections::HashMap<String, String>> for NodeInfo {
+    fn into(self) -> std::collections::HashMap<String, String> {
+        let mut table = std::collections::HashMap::new();
+        table.insert("name".to_string(), self.name);
+        table.insert("cluster_address".to_string(), self.cluster_address);
+        table.insert("app_address".to_string(), self.app_address);
+        table.insert("public_address".to_string(), self.public_address);
+        table
     }
 }
 

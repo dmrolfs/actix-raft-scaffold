@@ -1,23 +1,11 @@
-use std::sync::Arc;
 use actix::prelude::*;
-use actix_cors::Cors;
-use actix_files as fs;
-use actix_web::{
-    http::header, middleware::Logger, web, App, Error, HttpRequest, HttpResponse, HttpServer,
-};
 use tracing::*;
 use tracing_subscriber::fmt;
 use anyhow::{Result, Context};
 use actix_raft_grpc::{
-    NodeInfo,
     fib::FibActor,
-    ring::Ring,
-    network::Network,
     ports::PortData,
-    ports::http::routes::*,
-    ports::http::entities::*,
     raft_system::*,
-    utils,
 };
 
 // #[tokio::main]
@@ -31,7 +19,8 @@ async fn main() -> Result<()> {
         .finish();
 
     tracing::subscriber::set_global_default(subscriber)
-        .context("setting default subscriber failed");
+        .context("setting default subscriber failed")
+        .unwrap();
 
     let span = span!( Level::INFO, "wip" );
     let _guard = span.enter();

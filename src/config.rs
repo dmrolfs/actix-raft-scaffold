@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::path::PathBuf;
-use serde::{Serialize, Deserialize};
+use std::path::{Path, PathBuf};
+use serde::Deserialize;
 use structopt::StructOpt;
 use thiserror::Error;
 use tracing::*;
-use config::{Config, ConfigError};
+use ::config::Config;
 use crate::{NodeInfo, NodeList};
 
 #[derive(Error, Debug)]
@@ -39,7 +39,7 @@ pub enum JoinStrategy {
 }
 
 #[derive(Deserialize, Debug, Clone)]
-struct ConfigSchema {
+pub struct ConfigSchema {
     pub discovery_host_address: String,
     pub join_strategy: JoinStrategy,
     pub ring_replicas: isize,
@@ -89,11 +89,23 @@ impl From<ConfigSchema> for Configuration {
 
 impl Configuration {
     #[tracing::instrument]
-    pub fn load() -> Result<Configuration, ConfigurationError> {
-        let opt: Opt = Opt::from_args();
-        info!("CLI options {:?}", opt);
+    pub fn load_from_config<S>(host: S, config: Config) -> Result<Configuration, ConfigurationError>
+    where
+        S: AsRef<str> + std::fmt::Debug,
+    {
+        config
+            .try_into::<ConfigSchema>()
+            .map_err(|err| err.into())
+            .map(|schema| {
+                Configuration {
+                    host: host.as_ref().to_owned(),
+                    ..schema.into()
+                }
+            })
+    }
 
-        let ref_path = std::path::Path::new("config/reference.toml");
+    #[tracing::instrument]
+    pub fn load_from_opt(opt: Opt, reference: &Path) -> Result<Configuration, ConfigurationError> {
         let config_path = opt.configuration_path
             .as_ref()
             .map(|p| p.as_path());
@@ -105,19 +117,18 @@ impl Configuration {
                 .expect("could not find application configuration file")
         });
 
-        config.merge(config::File::from(ref_path))
+        config.merge(config::File::from(reference))
             .expect( "could not find config/reference.toml");
 
         config.merge( config::Environment::with_prefix("APP")).unwrap();
+        Self::load_from_config(opt.host, config)
+    }
 
-        config
-            .try_into::<ConfigSchema>()
-            .map_err(|err| err.into())
-            .map(|schema| {
-                Configuration {
-                    host: opt.host.to_owned(),
-                    ..schema.into()
-                }
-            })
+    #[tracing::instrument]
+    pub fn load() -> Result<Configuration, ConfigurationError> {
+        let opt: Opt = Opt::from_args();
+        info!("CLI options {:?}", opt);
+        let ref_path = std::path::Path::new("config/reference.toml");
+        Self::load_from_opt(opt, ref_path)
     }
 }

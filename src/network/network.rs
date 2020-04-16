@@ -1,13 +1,14 @@
 use std::collections::{BTreeMap, HashSet};
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::time::{Instant, Duration};
 use actix::prelude::*;
 use actix_server::Server;
 use actix_raft::{
     NodeId,
     metrics::RaftMetrics,
 };
-use serde::{Serialize, Deserialize, de::DeserializeOwned};
+use tokio::timer::Delay;
+use serde::{Serialize, Deserialize};
 use thiserror::Error;
 use tracing::*;
 use crate::{
@@ -21,9 +22,6 @@ use super::{
     NetworkState,
     node::*
 };
-use tokio::timer::Delay;
-use std::time::{Instant, Duration};
-use crate::network::NetworkError::NetworkBindError;
 
 #[derive(Error, Debug)]
 pub enum NetworkError {
@@ -58,18 +56,17 @@ pub enum NetworkError {
 //     }
 // }
 
-
 pub struct Network {
-    id: NodeId,
-    info: NodeInfo,
-    state: NetworkState,
-    discovery: SocketAddr,
-    nodes: BTreeMap<NodeId, NodeRef>,
-    nodes_connected: HashSet<NodeId>,
+    pub id: NodeId,
+    pub info: NodeInfo,
+    pub state: NetworkState,
+    pub discovery: SocketAddr,
+    pub nodes: BTreeMap<NodeId, NodeRef>,
+    pub nodes_connected: HashSet<NodeId>,
     pub isolated_nodes: HashSet<NodeId>,
-    ring: RingType,
-    metrics: Option<RaftMetrics>,
-    server: Option<Server>,
+    pub ring: RingType,
+    pub metrics: Option<RaftMetrics>,
+    pub server: Option<Server>,
 }
 
 impl std::fmt::Debug for Network {
@@ -201,7 +198,7 @@ impl Actor for Network {
         info!(network_id = self.id, "registering nodes configured with network...");
         let nodes = self.nodes.clone();
         for (node_id, node_ref) in nodes.iter() {
-            self.register_node(*node_id, &node_ref.info, ctx.address());
+            self.register_node(*node_id, &node_ref.info, ctx.address()).unwrap();
         }
     }
 }
@@ -240,8 +237,8 @@ impl Handler<BindEndpoint> for Network {
     type Result = Result<(), NetworkError>;
     // type Result = ResponseActFuture<Self, (), NetworkError>;
 
-    #[tracing::instrument(skip(self, ctx))]
-    fn handle(&mut self, bind: BindEndpoint, ctx: &mut Self::Context) -> Self::Result {
+    #[tracing::instrument(skip(self, _ctx))]
+    fn handle(&mut self, bind: BindEndpoint, _ctx: &mut Self::Context) -> Self::Result {
         info!(network_id = self.id, "Network binding to http endpoint: {}...", self.info.cluster_address);
         let server = ports::http::start_server(self.info.cluster_address.as_str(), bind.data)?;
         info!(network_id = self.id, "Network http endpoint: {} started.", self.info.cluster_address);
@@ -335,8 +332,8 @@ impl Message for GetCurrentLeader {
 impl Handler<GetCurrentLeader> for Network {
     type Result = ResponseActFuture<Self, CurrentLeader, NetworkError>;
 
-    #[tracing::instrument(skip(self,ctx))]
-    fn handle(&mut self, msg: GetCurrentLeader, ctx: &mut Self::Context) -> Self::Result {
+    #[tracing::instrument(skip(self,_ctx))]
+    fn handle(&mut self, msg: GetCurrentLeader, _ctx: &mut Self::Context) -> Self::Result {
         if let Some(ref mut metrics) = self.metrics {
             if let Some(leader) = metrics.current_leader {
                 Box::new(fut::result(Ok(CurrentLeader(Some(leader)))))
@@ -368,18 +365,41 @@ impl Handler<GetCurrentLeader> for Network {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct GetClusterState;
+pub struct GetClusterSummary;
 
-impl Message for GetClusterState {
-    type Result = Result<NetworkState, NetworkError>;
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClusterSummary {
+    pub id: NodeId,
+    pub state: NetworkState,
+    pub info: NodeInfo,
+    pub connected_nodes: HashSet<NodeId>,
+    pub isolated_nodes: HashSet<NodeId>,
+    // pub metrics: Option<RaftMetrics>,
 }
 
-impl Handler<GetClusterState> for Network {
-    type Result = Result<NetworkState, NetworkError>;
+impl ClusterSummary {
+    pub fn from_network(n: &Network) -> Self {
+        Self {
+            id: n.id,
+            state: n.state,
+            info: n.info.clone(),
+            connected_nodes: n.nodes_connected.clone(),
+            isolated_nodes: n.isolated_nodes.clone(),
+            // metrics: n.metrics,
+        }
+    }
+}
+
+impl Message for GetClusterSummary {
+    type Result = Result<ClusterSummary, NetworkError>;
+}
+
+impl Handler<GetClusterSummary> for Network {
+    type Result = Result<ClusterSummary, NetworkError>;
 
     #[tracing::instrument]
-    fn handle(&mut self, msg: GetClusterState, _ctx: &mut Self::Context) -> Self::Result {
-        Ok(self.state.clone())
+    fn handle(&mut self, msg: GetClusterSummary, _ctx: &mut Self::Context) -> Self::Result {
+        Ok(ClusterSummary::from_network(self))
     }
 }
 
@@ -398,10 +418,10 @@ pub struct ChangeClusterConfig {
 impl Handler<Join> for Network {
     type Result = ();
 
-    #[tracing::instrument(skip(self, ctx))]
-    fn handle(&mut self, msg: Join, ctx: &mut Self::Context) -> Self::Result {
+    #[tracing::instrument(skip(self, _ctx))]
+    fn handle(&mut self, msg: Join, _ctx: &mut Self::Context) -> Self::Result {
         info!(network_id = self.id, "handling Join request...");
-        let change = ChangeClusterConfig { to_add: vec![msg.id], to_remove: vec![], };
+        let _change = ChangeClusterConfig { to_add: vec![msg.id], to_remove: vec![], };
         //todo: find leader node
         //todo: determine network state based on # nodes connected (0=>initialize, 1=>SingleNode, +=>Clustered)
         //todo: send change to leader node

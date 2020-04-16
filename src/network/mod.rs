@@ -1,4 +1,4 @@
-use serde::{Serialize, Deserialize, de::DeserializeOwned};
+use serde::{Serialize, Deserialize};
 
 
 mod network;

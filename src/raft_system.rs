@@ -1,16 +1,12 @@
-use std::env;
-use std::sync::{Arc, RwLock};
 use actix::prelude::*;
 use actix_raft::NodeId;
-use tokio::timer::Delay;
 use thiserror::Error;
 use tracing::*;
 use crate::{
-    fib::FibActor,
     Configuration, NodeInfo,
     network::{Network, BindEndpoint},
     ports::PortData,
-    ring::{Ring, RingType},
+    ring::Ring,
     utils,
 };
 
@@ -47,8 +43,6 @@ impl std::fmt::Debug for RaftSystem {
     }
 }
 
-use futures::future::FutureResult;
-
 impl RaftSystem {
     #[tracing::instrument]
     pub fn new() -> Result<RaftSystem,  RaftSystemError> {
@@ -68,7 +62,7 @@ impl RaftSystem {
         let host_id = utils::generate_node_id(host_info.cluster_address.as_str());
 
         let network_arb = Arbiter::new();
-        let d = config.discovery_host;
+        // let d = config.discovery_host;
 
         let mut cluster_network = Network::new(
             host_id,
