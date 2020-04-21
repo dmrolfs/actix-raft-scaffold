@@ -7,7 +7,8 @@ use ::config::Config;
 use actix::prelude::*;
 use actix_raft_grpc::{utils, NodeInfo};
 use actix_raft_grpc::ring::Ring;
-use actix_raft_grpc::network::{Network, NetworkExtent, BindEndpoint, GetClusterSummary};
+use actix_raft_grpc::network::{Network, BindEndpoint, GetClusterSummary};
+use actix_raft_grpc::network::state::{Extent, Status};
 use actix_raft_grpc::config::Configuration;
 use actix_raft_grpc::fib::FibActor;
 use actix_raft_grpc::ports::PortData;
@@ -20,7 +21,7 @@ fn make_test_network(node_info: &NodeInfo) -> Network {
     Network::new(node_id, node_info, ring, discovery)
 }
 
-fn test_configuration<S>(host: S) -> Configuration
+fn make_test_configuration<S>(host: S) -> Configuration
 where
     S: AsRef<str> + std::fmt::Debug,
 {
@@ -66,7 +67,8 @@ fn test_network_create() {
     let actual = make_test_network(&node_info);
     assert_eq!(actual.id, utils::generate_node_id("127.0.0.1:8080"));
     assert_eq!(actual.info, node_info);
-    assert_eq!(actual.extent, NetworkExtent::Initialized);
+    assert_eq!(actual.state.unwrap(), Status::Joining);
+    assert_eq!(actual.state.extent, Extent::Initialized);
     assert_eq!(
         actual.discovery,
         "127.0.0.1:8888".parse::<SocketAddr>().unwrap()
@@ -87,14 +89,15 @@ fn test_configure_network() {
         public_address: "127.0.0.1:80".to_owned(),
     };
 
-    let config = test_configuration("node_a");
+    let config = make_test_configuration("node_a");
 
     let mut actual = make_test_network(&node_info);
     actual.configure_with(&config);
 
     assert_eq!(actual.id, utils::generate_node_id("127.0.0.1:8080"));
     assert_eq!(actual.info, node_info);
-    assert_eq!(actual.extent, NetworkExtent::Initialized);
+    assert_eq!(actual.state.unwrap(), Status::Joining);
+    assert_eq!(actual.state.extent, Extent::Initialized);
     assert_eq!(
         actual.discovery,
         "127.0.0.1:8888".parse::<SocketAddr>().unwrap()
@@ -122,12 +125,13 @@ fn test_network_start() {
         public_address: "127.0.0.1:80".to_owned(),
     };
 
-    let config = test_configuration("node_a");
+    let config = make_test_configuration("node_a");
 
     let mut network = make_test_network(&node_info);
     network.configure_with(&config);
     let network_addr = network.start();
 
+    
     // let foo = network.nodes.values().par_iter();
     // assert_eq!(network.nodes.len(), 3);
 }
@@ -151,7 +155,7 @@ fn test_network_bind() {
         public_address: "127.0.0.1:80".to_owned(),
     };
 
-    let config = test_configuration("node_a");
+    let config = make_test_configuration("node_a");
 
     let mut network = make_test_network(&node_info);
     network.configure_with(&config);
@@ -191,8 +195,10 @@ fn test_network_bind() {
             assert_eq!(actual.isolated_nodes.is_empty(), true);
             warn!("actual.isolated_nodes: {:?}", actual.isolated_nodes);
 
-            assert_eq!(actual.state, NetworkExtent::Cluster);
+            assert_eq!(actual.state.unwrap(), Status::WeaklyUp);
             warn!("actual.state: {:?}", actual.state);
+            assert_eq!(actual.state.extent, Extent::Cluster);
+            warn!("actual.state.extent: {:?}", actual.state.extent);
 
             assert_eq!(actual.connected_nodes.is_empty(), false);
             warn!("actual.connected_nodes: {:?}", actual.connected_nodes);
