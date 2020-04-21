@@ -1,0 +1,68 @@
+use std::{
+    collections::BTreeMap,
+    time::Duration,
+};
+use futures::sync::oneshot;
+use actix::prelude::*;
+use actix_raft::NodeId;
+use tracing::*;
+use crate::Network;
+
+pub struct TestController {
+    pub network: Addr<Network>,
+    initial_test_delay: Option<Duration>,
+    test_func: Option<Box<dyn FnOnce(&mut TestController, &mut Context<TestController> + 'static>>,
+}
+
+impl TestController {
+    /// Create a new instance.
+    pub fn new(network: Addr<Network>) -> Self {
+        Self { network, initial_test_delay: None, test_func: None }
+    }
+
+    ///// Register a node on the test controller.
+    // pub fn register(&mut self, id: NodeId, node: Addr<MemRaft>) -> &mut Self {
+    //     self.nodes.insert(id, node);
+    //     self
+    // }
+
+    /// Start this test controller with the given delay and test function.
+    pub fn start_with_test(
+        mut self,
+        delay: u64,
+        test: Box<dyn FnOnce(&mut RaftTestController, &mut Context<RaftTestController>) + 'static>
+    ) -> Addr<Self> {
+        self.initial_test_delay = Some(Duration::from_secs(delay));
+        self.test_func = Some(test);
+        self.start()
+    }
+}
+
+impl Actor for RaftTestController {
+    type Context = Context<Self>;
+
+    #[tracing::instrument]
+    fn started(&mut self, ctx: &mut Self::Context) {
+        let initial_delay = self.initial_test_delay.take().expect("Test misconfigured. Missing `initial_test_delay`. Use `start_with_test`.");
+        let test_func = self.test_func.take().expect("Test misconfigured. Missing `test_func`. Use `start_with_test`.");
+        ctx.run_later(initial_delay, test_func);
+    }
+}
+
+
+/// Send a client request to the Raft cluster, ensuring it is resent on failures.
+#[derive(Message)]
+pub struct ClientRequest {
+    pub payload: u64,
+    pub current_leader: Option<NodeId>,
+    pub cb: Option<oneshot::Sender<()>>,
+}
+
+impl Handler<ClientRequest> for TestController {
+    type Result = ();
+
+    #[tracing::instrument(skip(self, ctx))]
+    fn handle(&mut self, mut msg: ClientRequest, ctx: &mut Self::Context) -> Self::Result {
+        if let Some(leader)
+    }
+}

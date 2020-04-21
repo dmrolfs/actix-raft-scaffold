@@ -4,3 +4,26 @@ ring_replicas = 10
 max_discovery_timeout = 5
 max_raft_init_timeout = 5
 
+# The minimum election timeout in milliseconds.
+#election_timeout_min = 200
+
+# The maximum election timeout in milliseconds.
+#election_timeout_max = 300
+
+# The interval at which leaders will send heartbeats to followers to avoid election timeout.
+#heartbeat_interval = 50
+
+# The maximum number of entries per payload allowed to be transmitted during replication.
+#max_payload_entries = 300
+
+# The rate at which metrics will be pumped out from the Raft node.
+#metrics_rate = 5000
+
+# The directory where the log snapshots are to be kept for a Raft node.
+snapshot_dir = "/data/snapshots/"
+
+# The snapshot policy.
+#snapshot_policy =
+
+# The maximum snapshot chunk size. (3MB)
+#snapshot_max_chunk_size = 3_145_728

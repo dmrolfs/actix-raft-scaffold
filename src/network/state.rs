@@ -1,41 +1,41 @@
-use std::time::{Instant, Duration};
+use time::Duration;
 use std::fmt::{Debug, Display};
+use serde::{Serialize, Deserialize};
 use thiserror::*;
+use chrono::prelude::*;
 use rayon::prelude::*;
-use super::Node;
-use State::*;
 use strum_macros::{Display as StrumDisplay};
+use Status::*;
 
 #[derive(Error, Debug)]
 pub enum StateError {
-    #[error("cannot transition from {0} to {1}")]
-    InvalidStateTransition(State, State),
+    #[error("cannot transition from {0} status to {1}")]
+    InvalidStatusTransition(Status, Status),
 }
 
-#[derive(Debug, Clone)]
-struct StateEntry {
-    state: State,
-    entry: Instant,
-    exit: Option<Instant>,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StatusEntry {
+    status: Status,
+    entry: DateTime<Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    exit: Option<DateTime<Utc>>,
 }
 
-impl StateEntry {
-    pub fn new(state: State, entry_time: Instant) -> Self {
-        Self {
-            state,
-            entry: entry_time,
-            exit: None,
-        }
+impl StatusEntry {
+    pub fn new(status: Status, entry: DateTime<Utc>) -> Self { Self { status, entry, exit: None, } }
+
+    pub fn from_system_time(status: Status, entry_st: std::time::SystemTime) -> Self {
+        Self::new(status, entry_st.into())
     }
 
-    pub fn duration_in(&self) -> Duration {
-        let last = self.exit.unwrap_or(Instant::now());
+    pub fn duration_in(&self) -> time::Duration {
+        let last = self.exit.unwrap_or(Utc::now());
         last - self.entry
     }
 }
 
-#[derive(Debug, StrumDisplay, Clone, Copy, PartialEq)]
-enum State {
+#[derive(Debug, StrumDisplay, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum Status {
     Joining,
     WeaklyUp,
     Up,
@@ -45,48 +45,41 @@ enum State {
     Removed,
 }
 
-// impl Display for State {
-//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-//         let rep = match self {
-//             Joining => "Joining",
-//             WeaklyUp => "WeaklyUp",
-//             Up => "Up",
-//             Leaving => "Leaving",
-//             Exiting => "Exiting",
-//             Down => "Down",
-//             Removed => "Removed",
-//         };
-//         write!(f, "{}", rep)
-//     }
-// }
-
-#[derive(Clone)]
-pub struct StateMachine {
-    pub state: State,
-    log: Vec<StateEntry>,
+#[derive(Debug, StrumDisplay, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum Extent {
+    Initialized,
+    SingleNode,
+    Cluster,
 }
 
-impl StateMachine {
-    pub fn unwrap(&self) -> State { self.state }
+#[derive(Clone, Serialize, Deserialize)]
+pub struct NetworkState {
+    pub status: Status,
+    pub extent: Extent,
+    log: Vec<StatusEntry>,
+}
 
-    pub fn is_connected(&self) -> bool { self.state == Up }
+impl NetworkState {
+    pub fn unwrap(&self) -> Status { self.status }
 
-    pub fn into(&mut self, next: State) -> State {
-        self.check_next_state(next);
-        let now = Instant::now();
+    pub fn is_connected(&self) -> bool { self.status == Up }
+
+    pub fn into(&mut self, next: Status) -> Status {
+        self.check_next_status(next).expect("unexpected status transition");
+        let now = Utc::now();
         let previous = self.log.last_mut().expect("There's always at least one state entry");
         previous.exit = Some(now.clone());
 
-        let old = self.state;
-        let next_entry = StateEntry::new(next, now);
-        self.state = next_entry.state;
+        let old = self.status;
+        let next_entry = StatusEntry::new(next, now);
+        self.status = next_entry.status;
         self.log.push(next_entry);
         old
     }
 
-    fn check_next_state(&self, next: State) -> Result<State, StateError> {
-        match (self.state, next) {
-            (Removed, n) => Err(StateError::InvalidStateTransition(Removed, n)),
+    fn check_next_status(&self, next: Status) -> Result<Status, StateError> {
+        match (self.status, next) {
+            (Removed, n) => Err(StateError::InvalidStatusTransition(Removed, n)),
             (_, Down) => Ok(Down),
             (Joining, WeaklyUp) => Ok(WeaklyUp),
             (Joining, Up) => Ok(Up),
@@ -95,39 +88,42 @@ impl StateMachine {
             (Leaving, Exiting) => Ok(Exiting),
             (Down, Removed) => Ok(Removed),
             (Exiting, Removed) => Ok(Removed),
-            (c, n) => Err(StateError::InvalidStateTransition(c, n)),
+            (c, n) => Err(StateError::InvalidStatusTransition(c, n)),
         }
     }
 
-    pub fn timeline(&self) -> Vec<StateEntry> { self.log.clone() }
+    pub fn timeline(&self) -> Vec<StatusEntry> { self.log.clone() }
 
-    pub fn duration_in(&self, state: State) -> Duration {
-        self.log.par_iter()
-            .filter(|e| e.state == state)
-            .map(|e| e.duration_in())
-            .sum()
+    pub fn duration_in(&self, status: Status) -> Duration {
+        let millis = self.log.par_iter()
+            .filter(|e| e.status == status)
+            .map(|e| e.duration_in().num_milliseconds())
+            .sum();
+
+        Duration::milliseconds(millis)
     }
 }
 
-impl Default for StateMachine {
+impl Default for NetworkState {
     fn default() -> Self {
-        let entry = StateEntry::new(Joining, Instant::now());
-        StateMachine {
-            state: entry.state,
+        let entry = StatusEntry::new(Joining, Utc::now());
+        NetworkState {
+            status: entry.status,
+            extent: Extent::Initialized,
             log: vec![entry],
         }
     }
 }
 
-impl Debug for StateMachine {
+impl Debug for NetworkState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "StateMachine({}, log:{:?})", self.state, self.log)
+        write!(f, "StateMachine({}:{}, log:{:?})", self.status, self.extent, self.log)
     }
 }
 
-impl Display for StateMachine {
+impl Display for NetworkState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.state)
+        write!(f, "{}:{}", self.status, self.extent)
     }
 }
 

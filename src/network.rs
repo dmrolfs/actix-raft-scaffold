@@ -18,10 +18,12 @@ use crate::{
     ports::{self, PortData},
     utils,
 };
-use super::{
-    NetworkState,
-    node::*
-};
+use state::*;
+use node::{Node, NodeRef};
+
+pub mod state;
+pub mod node;
+
 
 #[derive(Error, Debug)]
 pub enum NetworkError {
@@ -74,8 +76,9 @@ impl std::fmt::Debug for Network {
         write!(
             f,
             // "Network(id:{:?}, state:{:?}, net_type:{:?}, info:{:?}, nodes:{:?}, isolated_nodes:{:?}, metrics:{:?})",
-            "Network(id:{:?}, nodes:{:?}, isolated_nodes:{:?}, metrics:{:?}, discovery:{:?})",
+            "Network(id:{:?}, state:{:?}, nodes:{:?}, isolated_nodes:{:?}, metrics:{:?}, discovery:{:?})",
             self.id,
+            self.state,
             self.nodes_connected,
             self.isolated_nodes,
             self.metrics,
@@ -86,7 +89,7 @@ impl std::fmt::Debug for Network {
 
 impl std::fmt::Display for Network {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Network(id:{})", self.id, )
+        write!(f, "Network(id:{} state:{})", self.id, self.state,)
     }
 }
 
@@ -100,7 +103,7 @@ impl Network {
         Network {
             id,
             info: info.clone(),
-            state: NetworkState::Initialized,
+            state: NetworkState::default(),
             discovery,
             nodes: BTreeMap::new(),
             nodes_connected: HashSet::new(),
@@ -117,7 +120,7 @@ impl Network {
             let id = utils::generate_node_id(n.cluster_address.as_str());
             let node_ref = NodeRef {
                 id,
-                info: n.clone(),
+                info: Some(n.clone()),
                 addr: None
             };
             info!(network_id = self.id, "configuring node ref:{:?}", node_ref);
@@ -138,7 +141,7 @@ impl Network {
         } else {
             let node_ref = NodeRef {
                 id: node_id,
-                info: node_info.clone(),
+                info: Some(node_info.clone()),
                 addr: None,
             };
             self.nodes.insert(node_id, node_ref);
@@ -153,20 +156,23 @@ impl Network {
         };
         debug!(network_id = self.id, "Registering node {:?}...", &node_ref);
 
-        if node_ref.addr.is_none() {
-            info!(network_id = self.id, "Starting node#{}...", node_ref.id);
+        if let Some(ref_info) = &node_ref.info {
+            if node_ref.addr.is_none() {
+                info!(network_id = self.id, "Starting node#{}...", node_ref.id);
 
-            let node = Node::new(
-                node_ref.id,
-                self.id,
-                node_ref.info.cluster_address.as_str(),
-                self.info.clone(),
-            );
+                let node = Node::new(
+                    node_ref.id,
+                    self.id,
+                    ref_info.cluster_address.as_str(),
+                    self.info.clone(),
+                );
 
-            node_ref.addr = Some(node.start());
+                node_ref.addr = Some(node.start());
+            }
+
+            self.restore_node(node_id);
         }
 
-        self.restore_node(node_id);
         Ok(())
     }
 
@@ -200,7 +206,9 @@ impl Actor for Network {
         info!(network_id = self.id, "registering nodes configured with network...");
         let nodes = self.nodes.clone();
         for (node_id, node_ref) in nodes.iter() {
-            self.register_node(*node_id, &node_ref.info, ctx.address()).unwrap();
+            if let Some(info) = &node_ref.info {
+                self.register_node(*node_id, info, ctx.address()).unwrap();
+            }
         }
     }
 }
@@ -383,7 +391,7 @@ impl ClusterSummary {
     pub fn from_network(n: &Network) -> Self {
         Self {
             id: n.id,
-            state: n.state,
+            state: n.state.clone(),
             info: n.info.clone(),
             connected_nodes: n.nodes_connected.clone(),
             isolated_nodes: n.isolated_nodes.clone(),

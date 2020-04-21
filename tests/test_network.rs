@@ -7,8 +7,8 @@ use ::config::Config;
 use actix::prelude::*;
 use actix_raft_grpc::{utils, NodeInfo};
 use actix_raft_grpc::ring::Ring;
-use actix_raft_grpc::network::{Network, NetworkError, NetworkState, BindEndpoint, GetClusterSummary};
-use actix_raft_grpc::config::{Configuration, ConfigSchema};
+use actix_raft_grpc::network::{Network, NetworkExtent, BindEndpoint, GetClusterSummary};
+use actix_raft_grpc::config::Configuration;
 use actix_raft_grpc::fib::FibActor;
 use actix_raft_grpc::ports::PortData;
 use actix::spawn;
@@ -25,9 +25,9 @@ where
     S: AsRef<str> + std::fmt::Debug,
 {
     let mut c: Config = Config::default();
-    c.set("discovery_host_address", "127.0.0.1:8080");
-    c.set("join_strategy", "static");
-    c.set("ring_replicas", 10);
+    c.set("discovery_host_address", "127.0.0.1:8080").unwrap();
+    c.set("join_strategy", "static").unwrap();
+    c.set("ring_replicas", 10).unwrap();
     c.set::<Vec<std::collections::HashMap<String, String>>>(
         "nodes",
         vec![
@@ -49,7 +49,7 @@ where
                 app_address: "127.0.0.1:9002".to_owned(),
                 public_address: "127.0.0.1:8082".to_owned(),
             }.into(),
-        ]);
+        ]).unwrap();
 
     Configuration::load_from_config(host, c).unwrap()
 }
@@ -66,7 +66,7 @@ fn test_network_create() {
     let actual = make_test_network(&node_info);
     assert_eq!(actual.id, utils::generate_node_id("127.0.0.1:8080"));
     assert_eq!(actual.info, node_info);
-    assert_eq!(actual.state, NetworkState::Initialized);
+    assert_eq!(actual.extent, NetworkExtent::Initialized);
     assert_eq!(
         actual.discovery,
         "127.0.0.1:8888".parse::<SocketAddr>().unwrap()
@@ -94,7 +94,7 @@ fn test_configure_network() {
 
     assert_eq!(actual.id, utils::generate_node_id("127.0.0.1:8080"));
     assert_eq!(actual.info, node_info);
-    assert_eq!(actual.state, NetworkState::Initialized);
+    assert_eq!(actual.extent, NetworkExtent::Initialized);
     assert_eq!(
         actual.discovery,
         "127.0.0.1:8888".parse::<SocketAddr>().unwrap()
@@ -191,7 +191,7 @@ fn test_network_bind() {
             assert_eq!(actual.isolated_nodes.is_empty(), true);
             warn!("actual.isolated_nodes: {:?}", actual.isolated_nodes);
 
-            assert_eq!(actual.state, NetworkState::Cluster);
+            assert_eq!(actual.state, NetworkExtent::Cluster);
             warn!("actual.state: {:?}", actual.state);
 
             assert_eq!(actual.connected_nodes.is_empty(), false);
@@ -211,5 +211,5 @@ fn test_network_bind() {
     // warn!("#### ... AFTER BLOCK");
     spawn(test);
 
-    assert!(sys.run.is_ok(), "error during test");
+    assert!(sys.run().is_ok(), "error during test");
 }

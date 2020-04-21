@@ -1,0 +1,180 @@
+mod fixtures;
+
+use std::time::{Instant, Duration};
+use std::net::SocketAddr;
+// use rayon::prelude::*;
+use tracing::*;
+use ::config::Config;
+use actix::prelude::*;
+use actix_raft_grpc::{utils, NodeInfo};
+use actix_raft_grpc::ring::Ring;
+use actix_raft_grpc::network::{Network, NetworkState, BindEndpoint, GetClusterSummary};
+use actix_raft_grpc::config::Configuration;
+use actix_raft_grpc::fib::FibActor;
+use actix_raft_grpc::ports::PortData;
+use actix::spawn;
+
+use actix_raft_grpc::network::node::state::*;
+
+struct Foo<S> {
+    name: String,
+    state: S,
+}
+
+impl<S> Foo<S> {
+    pub fn new() -> Self {
+        Foo {
+            state: Joining::new()
+        }
+    }
+}
+
+impl<S> Actor for Foo<S> {
+    type Context = Context<Self>;
+
+    #[tracing::instrument(skip(self, _ctx))]
+    fn started(&mut self, _ctx: &mut Self::Context) {
+        info!("starting {}[{:?}]", self.name, self.state);
+    }
+
+    #[tracing::instrument(skip(self, _ctx))]
+    fn stopping(&mut self, _ctx: &mut Self::Context) -> Running {
+        info!("stopping {}[{:?}]", self.name, self.state);
+        Running::Stop
+    }
+}
+
+impl From<Foo<Joining>> for Foo<WeaklyUp> {
+    fn from(from: Foo<Joining>) -> Self {
+        Foo {
+            state: WeaklyUp { started_at: from.state.started_at, },
+            ..from
+        }
+    }
+}
+
+impl From<Foo<WeaklyUp>> for Foo<Up> {
+    fn from(from: Foo<WeaklyUp>) -> Self {
+        let now = Instant::now();
+        Foo {
+            state: Up {
+                confirmation_duration: now - from.state.started_at,
+                started_at: now,
+            },
+            ..from
+        }
+    }
+}
+
+#[derive(Message, Debug)]
+struct GetName;
+
+impl<S> Handler<GetName> for Foo<S> {
+    type Result = String;
+
+    #[tracing::instrument(skip(self, _ctx))]
+    fn handle(&mut self, msg: GetName, _ctx: &mut Self::Context) -> Self::Result {
+        info!("getting name: {} [{:?}]", self.name, self.state);
+        self.name.clone()
+    }
+}
+
+#[derive(Message, Debug)]
+struct Transition;
+
+impl Handler<Transition> for Foo<Joining> {
+    type Result = ();
+
+    #[tracing::instrument(skip(self, _ctx))]
+    fn handle(&mut self, msg: Transition, _ctx: &mut _) -> Self::Result {
+        let before = self.state;
+        let mut bar: Foo<WeaklyUp> = self.from::<WeaklyUp>(self);
+        self = &mut bar;
+        let after = self.state;
+        info!("transition state from {}", self.state);
+    }
+}
+
+
+
+#[test]
+fn test_network_bind() {
+    fixtures::setup_logger();
+    let span = span!( Level::INFO, "test_network_bind" );
+    span.enter();
+
+    // actix::System::run( || {
+    //
+    // })
+
+    let mut sys = System::builder().stop_on_panic(true).name("test").build();
+
+    let node_info = NodeInfo {
+        name: "node_a".to_owned(),
+        cluster_address: "127.0.0.1:8080".to_owned(),
+        app_address: "127.0.0.1:9000".to_owned(),
+        public_address: "127.0.0.1:80".to_owned(),
+    };
+
+    let config = test_configuration("node_a");
+
+    let mut network = make_test_network(&node_info);
+    network.configure_with(&config);
+    let network_addr = network.start();
+
+    let fib_act = FibActor::new();
+    let fib_addr = fib_act.start();
+
+    let data = PortData {
+        fib: fib_addr,
+        network: network_addr.clone(),
+    };
+
+    let network2 = network_addr.clone();
+    let test = network_addr.send(BindEndpoint::new(data))
+        .map_err(|err| {
+            error!("error in bind: {:?}", err);
+            panic!(err)
+        })
+        .and_then( move |_| {
+            network2.send(GetClusterSummary)
+        })
+        .map_err(|err| {
+            error!("error in get cluster summary: {:?}", err);
+            panic!(err)
+        })
+        .and_then(move |res| {
+            let actual = res.unwrap();
+            error!("B: actual cluster summary:{:?}", actual);
+
+            assert_eq!(actual.id, utils::generate_node_id("127.0.0.1:8080"));
+            warn!("actual.id: {:?}", actual.id);
+
+            assert_eq!(actual.info, node_info);
+            warn!("actual.info: {:?}", actual.info);
+
+            assert_eq!(actual.isolated_nodes.is_empty(), true);
+            warn!("actual.isolated_nodes: {:?}", actual.isolated_nodes);
+
+            assert_eq!(actual.state, NetworkState::Cluster);
+            warn!("actual.state: {:?}", actual.state);
+
+            assert_eq!(actual.connected_nodes.is_empty(), false);
+            warn!("actual.connected_nodes: {:?}", actual.connected_nodes);
+
+            Ok(())
+        })
+        .then(|res| {
+            warn!("test finished -- wrapping up");
+            actix::System::current().stop();
+            res
+        });
+// ;
+    warn!("#### BEFORE BLOCK...");
+    // System::current().stop_on_panic();
+    // sys.block_on(test);
+    // warn!("#### ... AFTER BLOCK");
+    spawn(test);
+
+    assert!(sys.run().is_ok(), "error during test");
+}
