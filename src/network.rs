@@ -159,7 +159,8 @@ impl Network {
             let node = Node::new(
                 node_ref.id,
                 self.id,
-                node_ref.info.cluster_address.as_str()
+                node_ref.info.cluster_address.as_str(),
+                self.info.clone(),
             );
 
             node_ref.addr = Some(node.start());
@@ -180,6 +181,7 @@ impl Network {
     }
 
     /// Restore the network of the specified node.
+    #[tracing::instrument(skip(self))]
     fn restore_node(&mut self, id: NodeId) {
         if self.isolated_nodes.contains(&id) {
             info!("Restoring network for node #{}", &id);
@@ -409,6 +411,13 @@ pub struct Join {
     pub info: NodeInfo,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct JoinAcknowledged {
+    pub joining_id: NodeId,
+    pub accepted_by: NodeId,
+    //todo WORK HERE
+}
+
 #[derive(Serialize, Deserialize, Message, Clone)]
 pub struct ChangeClusterConfig {
     pub to_add: Vec<NodeId>,
@@ -421,10 +430,24 @@ impl Handler<Join> for Network {
     #[tracing::instrument(skip(self, _ctx))]
     fn handle(&mut self, msg: Join, _ctx: &mut Self::Context) -> Self::Result {
         info!(network_id = self.id, "handling Join request...");
-        let _change = ChangeClusterConfig { to_add: vec![msg.id], to_remove: vec![], };
+        // let _change = ChangeClusterConfig { to_add: vec![msg.id], to_remove: vec![], };
+
         //todo: find leader node
         //todo: determine network state based on # nodes connected (0=>initialize, 1=>SingleNode, +=>Clustered)
-        //todo: send change to leader node
+        //todo: send Join to leader node
+//todo: leader's local_node interprets Join into ChangeClusterConfig command;
         //todo: and_then register_node( msg.id, msg.info, ctx.address() )
+    }
+}
+
+#[derive(Message, Debug)]
+pub struct Handshake(pub NodeId, pub NodeInfo);
+
+impl Handler<Handshake> for Network {
+    type Result = ();
+
+    #[tracing::instrument(skip(self, _ctx))]
+    fn handle(&mut self, msg: Handshake, _ctx: &mut Self::Context) -> Self::Result {
+        self.restore_node(msg.0);
     }
 }
