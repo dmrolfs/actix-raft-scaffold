@@ -4,6 +4,7 @@ use actix_raft::NodeId;
 use actix_web::client::Client;
 use crate::NodeInfo;
 use super::{Node, NodeError};
+use crate::ports::http::entities::NodeInfoMessage;
 
 pub trait ChangeClusterBehavior {
     fn change_cluster_config(
@@ -112,4 +113,30 @@ impl ChangeClusterBehavior for RemoteNode {
     }
 }
 
-impl ConnectionBehavior for RemoteNode {}
+impl ConnectionBehavior for RemoteNode {
+    fn connect(
+        &mut self,
+        local_id: NodeId,
+        local_info: &NodeInfo,
+        _ctx: &mut <Node as Actor>::Context
+    ) -> Result<(), NodeError> {
+        let join_route = format!("http://{}/api/cluster/nodes/{}", local_info.cluster_address, local_id);
+        let port_info: crate::ports::http::entities::NodeInfo = (*local_info).into();
+        let message = NodeInfoMessage {
+            node_id: Some(local_id.into()),
+            node_info: Some(port_info),
+        };
+
+        let body = message;
+        let foo = self.client.post(join_route)
+            .header("Content-Type", "application/json")
+            .send_json(&body)
+            .wait();
+
+        foo
+    }
+
+    fn disconnect(&mut self, _ctx: &mut <Node as Actor>::Context) -> Result<(), NodeError> {
+        unimplemented!()
+    }
+}

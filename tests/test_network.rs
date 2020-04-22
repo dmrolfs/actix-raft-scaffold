@@ -199,6 +199,8 @@ fn test_network_start() {
             info!("[{:?}] actual.connected_nodes: {:?}", actual.id ,actual.connected_nodes);
             assert_eq!(actual.connected_nodes.is_empty(), true);
 
+            debug_assert!(actual.metrics.is_none(), "no raft metrics");
+
             // debug_assert!(false, "force failure");
             Ok(())
         })
@@ -277,6 +279,8 @@ fn test_network_bind() {
 
             info!("[{:?}] actual.connected_nodes: {:?}", actual.id ,actual.connected_nodes);
             assert_eq!(actual.connected_nodes.is_empty(), true);
+
+            debug_assert!(actual.metrics.is_none(), "no raft metrics");
 
             Ok(())
         })

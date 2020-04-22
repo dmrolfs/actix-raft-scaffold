@@ -20,9 +20,11 @@ use crate::{
 };
 use state::*;
 use node::{Node, NodeRef};
+use summary::ClusterSummary;
 
 pub mod state;
 pub mod node;
+pub mod summary;
 
 
 #[derive(Error, Debug)]
@@ -76,13 +78,13 @@ impl std::fmt::Debug for Network {
         write!(
             f,
             // "Network(id:{:?}, state:{:?}, net_type:{:?}, info:{:?}, nodes:{:?}, isolated_nodes:{:?}, metrics:{:?})",
-            "Network(id:{:?}, state:{:?}, nodes:{:?}, isolated_nodes:{:?}, metrics:{:?}, discovery:{:?})",
+            "Network(id:{:?}, state:{:?}, nodes:{:?}, isolated_nodes:{:?}, discovery:{:?}, metrics:{:?})",
             self.id,
             self.state,
             self.nodes_connected,
             self.isolated_nodes,
-            self.metrics,
             self.discovery,
+            self.metrics,
         )
     }
 }
@@ -111,6 +113,17 @@ impl Network {
             ring,
             metrics: None,
             server: None,
+        }
+    }
+
+    pub fn summarize(&self) -> ClusterSummary {
+        ClusterSummary {
+            id: self.id,
+            state: self.state.clone(),
+            info: self.info.clone(),
+            connected_nodes: self.nodes_connected.clone(),
+            isolated_nodes: self.isolated_nodes.clone(),
+            metrics: self.metrics.map(|m| m.into()),
         }
     }
 
@@ -384,29 +397,6 @@ impl Handler<GetCurrentLeader> for Network {
 #[derive(Debug, Clone, Copy)]
 pub struct GetClusterSummary;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ClusterSummary {
-    pub id: NodeId,
-    pub state: NetworkState,
-    pub info: NodeInfo,
-    pub connected_nodes: HashSet<NodeId>,
-    pub isolated_nodes: HashSet<NodeId>,
-    // pub metrics: Option<RaftMetrics>,
-}
-
-impl ClusterSummary {
-    pub fn from_network(n: &Network) -> Self {
-        Self {
-            id: n.id,
-            state: n.state.clone(),
-            info: n.info.clone(),
-            connected_nodes: n.nodes_connected.clone(),
-            isolated_nodes: n.isolated_nodes.clone(),
-            // metrics: n.metrics,
-        }
-    }
-}
-
 impl Message for GetClusterSummary {
     type Result = Result<ClusterSummary, NetworkError>;
 }
@@ -416,7 +406,7 @@ impl Handler<GetClusterSummary> for Network {
 
     #[tracing::instrument]
     fn handle(&mut self, msg: GetClusterSummary, _ctx: &mut Self::Context) -> Self::Result {
-        Ok(ClusterSummary::from_network(self))
+        Ok(self.summarize())
     }
 }
 

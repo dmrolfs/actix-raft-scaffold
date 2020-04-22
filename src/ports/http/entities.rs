@@ -43,31 +43,45 @@ pub struct Failure {
     pub description: std::string::String,
 }
 
-#[derive(Clone, Copy, PartialEq, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub struct NodeId {
     pub id: u64,
 }
 
-impl Into<actix_raft::NodeId> for NodeId {
-    fn into(self) -> actix_raft::NodeId {
-        self.id as actix_raft::NodeId
-    }
+impl From<actix_raft::NodeId> for NodeId {
+    fn from( node_id: actix_raft::NodeId) -> Self { Self { id: node_id, } }
 }
 
-#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+impl Into<actix_raft::NodeId> for NodeId {
+    fn into(self) -> u64 { self.id }
+}
+
+#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub struct NodeInfo {
-    pub ui_address: std::string::String,
-    pub app_address: std::string::String,
+    pub name: std::string::String,
     pub cluster_address: std::string::String,
+    pub app_address: std::string::String,
+    pub public_address: std::string::String,
+}
+
+impl From<crate::NodeInfo> for NodeInfo {
+    fn from(info: crate::NodeInfo) -> Self {
+        Self {
+            name: info.name,
+            cluster_address: info.cluster_address.to_owned(),
+            app_address: info.app_address.to_owned(),
+            public_address: info.public_address.to_owned(),
+        }
+    }
 }
 
 impl Into<crate::NodeInfo> for NodeInfo {
     fn into(self) -> crate::NodeInfo {
         crate::NodeInfo {
-            name: "".to_owned(),
-            cluster_address: self.cluster_address,
-            app_address: self.app_address,
-            public_address: self.ui_address,
+            name: self.name,
+            cluster_address: self.cluster_address.to_owned(),
+            app_address: self.app_address.to_owned(),
+            public_address: self.public_address.to_owned(),
         }
     }
 }
