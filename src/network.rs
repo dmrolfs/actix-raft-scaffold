@@ -114,8 +114,10 @@ impl Network {
         }
     }
 
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(skip(self, c))]
     pub fn configure_with(&mut self, c: &Configuration) {
+        info!("configuration:{:?}", c);
+
         for n in c.nodes.values() {
             let id = utils::generate_node_id(n.cluster_address.as_str());
             let node_ref = NodeRef {
@@ -123,7 +125,12 @@ impl Network {
                 info: Some(n.clone()),
                 addr: None
             };
-            info!(network_id = self.id, "configuring node ref:{:?}", node_ref);
+            info!(
+                network_id = self.id,
+                "adding configured {} {:?}",
+                if self.id == id { "LOCAL" } else { "remote" },
+                node_ref
+            );
 
             self.nodes.insert(id, node_ref);
         }
