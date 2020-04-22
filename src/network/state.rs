@@ -1,4 +1,4 @@
-use time::Duration;
+use std::time::Duration;
 use std::fmt::{Debug, Display};
 use serde::{Serialize, Deserialize};
 use thiserror::*;
@@ -100,7 +100,7 @@ impl NetworkState {
             .map(|e| e.duration_in().num_milliseconds())
             .sum();
 
-        Duration::milliseconds(millis)
+        ::time::Duration::milliseconds(millis).to_std().unwrap()
     }
 }
 
