@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="CargoProjects">
+    <cargoProject FILE="$PROJECT_DIR$/Cargo.toml" />
+  </component>
+  <component name="ChangeListManager">
+    <list default="true" id="39a67fe9-95de-4dc0-ab86-a44db45938be" name="Default Changelist" comment="">
+      <change afterPath="$PROJECT_DIR$/actix-raft-scaffold.iml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/network/messages.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/.gitignore" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/artifacts/unnamed.xml" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/modules.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/modules.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Cargo.toml" beforeDir="false" afterPath="$PROJECT_DIR$/Cargo.toml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/proto/cluster_api.proto" beforeDir="false" afterPath="$PROJECT_DIR$/proto/cluster_api.proto" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/proto/common.proto" beforeDir="false" afterPath="$PROJECT_DIR$/proto/common.proto" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/lib.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/lib.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/network.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/network.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/network/node.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/network/node.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/network/node/proximity.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/network/node/proximity.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/network/state.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/network/state.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/network/summary.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/network/summary.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/ports/http/entities.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/ports/http/entities.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/ports/http/routes.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/ports/http/routes.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/test_network.rs" beforeDir="false" afterPath="$PROJECT_DIR$/tests/test_network.rs" afterDir="false" />
+    </list>
+    <option name="SHOW_DIALOG" value="false" />
+    <option name="HIGHLIGHT_CONFLICTS" value="true" />
+    <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
+    <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="CodeStyleSettingsInfer">
+    <option name="done" value="true" />
+  </component>
+  <component name="FileTemplateManagerImpl">
+    <option name="RECENT_TEMPLATES">
+      <list>
+        <option value="Rust File" />
+      </list>
+    </option>
+  </component>
+  <component name="Git.Settings">
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
+  </component>
+  <component name="MacroExpansionManager">
+    <option name="directoryName" value="ww15qe1g" />
+  </component>
+  <component name="ProjectCodeStyleSettingsMigration">
+    <option name="version" value="1" />
+  </component>
+  <component name="ProjectId" id="1attDF1jUrewtZ1j1M5x0jcRk0k" />
+  <component name="ProjectViewState">
+    <option name="showLibraryContents" value="true" />
+    <option name="showMembers" value="true" />
+  </component>
+  <component name="PropertiesComponent">
+    <property name="RunOnceActivity.OpenProjectViewOnStart" value="true" />
+    <property name="RunOnceActivity.ShowReadmeOnStart" value="true" />
+    <property name="SHARE_PROJECT_CONFIGURATION_FILES" value="true" />
+    <property name="org.rust.cargo.project.model.PROJECT_DISCOVERY" value="true" />
+    <property name="settings.editor.selected.configurable" value="preferences.fileTypes" />
+  </component>
+  <component name="RustProjectSettings">
+    <option name="toolchainHomeDirectory" value="$USER_HOME$/.cargo/bin" />
+    <option name="version" value="2" />
+  </component>
+  <component name="TaskManager">
+    <task active="true" id="Default" summary="Default task">
+      <changelist id="39a67fe9-95de-4dc0-ab86-a44db45938be" name="Default Changelist" comment="" />
+      <created>1587566595342</created>
+      <option name="number" value="Default" />
+      <option name="presentableId" value="Default" />
+      <updated>1587566595342</updated>
+    </task>
+    <servers />
+  </component>
+  <component name="WindowStateProjectService">
+    <state x="653" y="259" key="#com.intellij.ide.util.MemberChooser" timestamp="1587841077250">
+      <screen x="0" y="23" width="1680" height="1027" />
+    </state>
+    <state x="653" y="259" key="#com.intellij.ide.util.MemberChooser/0.23.1680.1027@0.23.1680.1027" timestamp="1587841077250" />
+    <state x="349" y="175" key="SettingsEditor" timestamp="1587566880211">
+      <screen x="0" y="23" width="1680" height="1027" />
+    </state>
+    <state x="349" y="175" key="SettingsEditor/0.23.1680.1027@0.23.1680.1027" timestamp="1587566880211" />
+    <state x="540" y="293" width="600" height="486" key="find.popup" timestamp="1587653231566">
+      <screen x="0" y="23" width="1680" height="1027" />
+    </state>
+    <state x="540" y="293" width="600" height="486" key="find.popup/0.23.1680.1027@0.23.1680.1027" timestamp="1587653231566" />
+    <state x="505" y="253" width="670" height="676" key="search.everywhere.popup" timestamp="1588014748933">
+      <screen x="0" y="23" width="1680" height="1027" />
+    </state>
+    <state x="505" y="253" width="670" height="676" key="search.everywhere.popup/0.23.1680.1027@0.23.1680.1027" timestamp="1588014748933" />
+  </component>
+</project>

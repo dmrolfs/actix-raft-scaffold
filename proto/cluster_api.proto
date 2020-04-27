@@ -182,6 +182,7 @@ message ChangeClusterMembershipResponse {
     oneof response {
         ClusterMembershipChange result = 1;
         Failure failure = 2;
+        CommandRejectedNotLeader = 3;
     }
 }
 

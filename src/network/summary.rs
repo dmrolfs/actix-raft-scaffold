@@ -7,6 +7,7 @@ use crate::NodeInfo;
 use super::NetworkState;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ClusterSummary {
     pub id: NodeId,
     pub state: NetworkState,
@@ -60,6 +61,7 @@ impl From<actix_raft::metrics::State> for RaftState {
 /// See the [module level documentation](https://docs.rs/actix-raft/latest/actix-raft/metrics/index.html)
 /// for more details.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Metrics {
     /// The ID of the Raft node.
     pub id: NodeId,

@@ -1,7 +1,8 @@
 use serde::{Serialize, Deserialize};
-// use serde_json as json;
+
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct Any {
     /// Prost Any
     ///
@@ -39,11 +40,13 @@ pub struct Any {
 }
 
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Failure {
     pub description: std::string::String,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct NodeId {
     pub id: u64,
 }
@@ -57,6 +60,7 @@ impl Into<actix_raft::NodeId> for NodeId {
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct NodeInfo {
     pub name: std::string::String,
     pub cluster_address: std::string::String,
@@ -86,8 +90,16 @@ impl Into<crate::NodeInfo> for NodeInfo {
     }
 }
 
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandRejectedNotLeader {
+    pub leader_id: NodeId,
+    pub leader_address: std::string::String,
+}
+
 /// Raft log entry.
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Entry {
     /// This entry's term.
     pub term: u64,
@@ -111,17 +123,20 @@ pub mod entry {
 }
 
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct EntryNormal {
     pub entry: ::std::option::Option<Normal>,
 }
 
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Normal {
     pub data: ::std::option::Option<Any>,
 }
 
 /// A model of the membership configuration of the cluster.
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct MembershipConfig {
     /// A flag indicating if the system is currently in a joint consensus state.
     pub is_in_joint_consensus: bool,
@@ -142,6 +157,7 @@ pub struct MembershipConfig {
 /// transmitted from a leader during replication, an `InstallSnapshotRequest`
 /// RPC will be sent instead.
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SnapshotPath {
     pub path: std::string::String,
 }
@@ -156,6 +172,7 @@ pub struct SnapshotPath {
 /// followers which may be some distance behind in replication, may have conflicting entries, or
 /// which may be new to the cluster.
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ConflictOpt {
     /// The term of the most recent entry which does not conflict with the received request.
     pub term: u64,
@@ -164,28 +181,34 @@ pub struct ConflictOpt {
 }
 
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct NodeIdMessage {
     pub node_id: ::std::option::Option<NodeId>,
 }
 
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct NodeInfoMessage {
     pub node_id: ::std::option::Option<NodeId>,
     pub node_info: ::std::option::Option<NodeInfo>,
 }
 
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ClusterNodesRequest {}
 
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ClusterNodesResponse {
     pub nodes: ::std::collections::HashMap<u64, NodeInfo>,
 }
 
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ClusterStateRequest {}
 
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ClusterStateResponse {
     pub state: ClusterState,
 }
@@ -196,6 +219,7 @@ pub struct ClusterStateResponse {
 /// return the response to the original sender.
 ///
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RaftAppendEntriesRequest {
     /// A non-standard field, this is the ID of the intended recipient of this RPC.
     pub target: u64,
@@ -220,6 +244,7 @@ pub struct RaftAppendEntriesRequest {
 /// and all RPCs are handled in an idempotent fashion, so Raft will almost always retry
 /// sending a failed RPC, depending on the state of the Raft.
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RaftAppendEntriesResponse {
     /// The responding node's current term, for leader to update itself.
     pub term: u64,
@@ -244,6 +269,7 @@ pub mod raft_append_entries_response {
 }
 
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RaftInstallSnapshotRequest {
     /// A non-standard field, this is the ID of the intended recipient of this RPC.
     pub target: u64,
@@ -265,12 +291,14 @@ pub struct RaftInstallSnapshotRequest {
 
 /// An RPC response to an `RaftInstallSnapshotResponse` message.
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RaftInstallSnapshotResponse {
     /// The receiving node's current term, for leader to update itself.
     pub term: u64,
 }
 
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RaftVoteRequest {
     /// A non-standard field, this is the ID of the intended recipient of this RPC.
     pub target: u64,
@@ -286,6 +314,7 @@ pub struct RaftVoteRequest {
 
 /// An RPC response to an `RaftVoteResponse` message.
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RaftVoteResponse {
     /// The current term of the responding node, for the candidate to update itself.
     pub term: u64,
@@ -310,6 +339,7 @@ pub struct RaftVoteResponse {
 // }
 
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ChangeClusterMembershipResponse {
     pub response: ::std::option::Option<change_cluster_membership_response::Response>,
 }
@@ -321,13 +351,33 @@ pub mod change_cluster_membership_response {
     pub enum Response {
         Result(super::ClusterMembershipChange),
         Failure(super::Failure),
+        CommandRejectedNotLeader(super::CommandRejectedNotLeader),
     }
 }
 
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ClusterMembershipChange {
     pub node_id: ::std::option::Option<NodeId>,
     pub action: MembershipAction,
+}
+
+impl From<crate::network::messages::ClusterMembershipChange> for ClusterMembershipChange {
+    fn from(that: crate::network::messages::ClusterMembershipChange) -> Self {
+        Self {
+            node_id: that.node_id.map(|id| id.into()),
+            action: that.action.into(),
+        }
+    }
+}
+
+impl Into<crate::network::messages::ClusterMembershipChange> for ClusterMembershipChange {
+    fn into(self) -> crate::network::messages::ClusterMembershipChange {
+        crate::network::messages::ClusterMembershipChange {
+            node_id: self.node_id.map(|id| id.into()),
+            action: self.action.into(),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -343,4 +393,22 @@ pub enum ClusterState {
 pub enum MembershipAction {
     Added = 0,
     Removed = 1,
+}
+
+impl From<crate::network::messages::MembershipAction> for MembershipAction {
+    fn from(that: crate::network::messages::MembershipAction) -> Self {
+        match that {
+            crate::network::messages::MembershipAction::Joining => MembershipAction::Added,
+            crate::network::messages::MembershipAction::Leaving => MembershipAction::Removed,
+        }
+    }
+}
+
+impl Into<crate::network::messages::MembershipAction> for MembershipAction {
+    fn into(self) -> crate::network::messages::MembershipAction {
+        match self {
+            MembershipAction::Added => crate::network::messages::MembershipAction::Joining,
+            MembershipAction::Removed => crate::network::messages::MembershipAction::Leaving,
+        }
+    }
 }

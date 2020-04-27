@@ -14,3 +14,9 @@ message NodeInfo {
     string app_address = 2;
     string cluster_address = 3;
 }
+
+
+message CommandRejectedNotLeader {
+    NodeId leader_id = 1;
+    string leader_address = 2;
+}

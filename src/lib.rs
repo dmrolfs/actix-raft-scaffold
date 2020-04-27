@@ -17,6 +17,7 @@ pub mod ring; //todo move into private and support tailoring via configuration
 pub use self::config::{Configuration, ConfigurationError, JoinStrategy};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct NodeInfo {
     pub name: String,
     pub cluster_address: String,
@@ -39,9 +40,9 @@ impl Into<std::collections::HashMap<String, String>> for NodeInfo {
     fn into(self) -> std::collections::HashMap<String, String> {
         let mut table = std::collections::HashMap::new();
         table.insert("name".to_string(), self.name);
-        table.insert("cluster_address".to_string(), self.cluster_address);
-        table.insert("app_address".to_string(), self.app_address);
-        table.insert("public_address".to_string(), self.public_address);
+        table.insert("clusterAddress".to_string(), self.cluster_address);
+        table.insert("appAddress".to_string(), self.app_address);
+        table.insert("publicAddress".to_string(), self.public_address);
         table
     }
 }

@@ -11,6 +11,7 @@ path = "examples/wip-http.rs"
 
 [dev-dependencies]
 anyhow = "1.0"
+mockito = "0.25"
 
 [dependencies]
 actix-web = "1.0.9"
@@ -58,11 +59,10 @@ rand = "0.7"
 thiserror = "1.0"
 strum = "0.18"
 strum_macros = "0.18"
-
+reqwest = "0.9"
 #prost = "0.6"
 #prost-types = "0.6"
 #tonic = "0.1"
 
 #[build-dependencies]
 #tonic-build = "0.1.0"
-

@@ -8,8 +8,6 @@ use actix_raft::{
     metrics::RaftMetrics,
 };
 use tokio::timer::Delay;
-use serde::{Serialize, Deserialize};
-use thiserror::Error;
 use tracing::*;
 use crate::{
     Configuration,
@@ -22,25 +20,13 @@ use state::*;
 use node::{Node, NodeRef};
 use summary::ClusterSummary;
 
+pub use messages::NetworkError;
+pub use messages::{RegisterNode, ClusterMembershipChange};
+
 pub mod state;
 pub mod node;
+pub mod messages;
 pub mod summary;
-
-
-#[derive(Error, Debug)]
-pub enum NetworkError {
-    #[error("failed to bind network endpoint")]
-    NetworkBindError(#[from] ports::PortError),
-
-    #[error("error in delay time {0}")]
-    DelayError(#[from] tokio::timer::Error),
-
-    #[error("error in actor mailbox {0}")]
-    ActorMailBoxError(#[from] actix::MailboxError),
-
-    #[error("unknown network error {0}")]
-    Unknown(String),
-}
 
 
 // impl Network {
@@ -123,7 +109,7 @@ impl Network {
             info: self.info.clone(),
             connected_nodes: self.nodes_connected.clone(),
             isolated_nodes: self.isolated_nodes.clone(),
-            metrics: self.metrics.map(|m| m.into()),
+            metrics: self.metrics.clone().map(|m| m.into()),
         }
     }
 
@@ -149,6 +135,25 @@ impl Network {
         }
     }
 
+    fn is_leader(&self) -> bool {
+        match self.metrics.as_ref().map(|m| m.current_leader) {
+            Some(Some(leader_id)) => self.id == leader_id,
+            _ => false
+        }
+    }
+
+    fn leader_ref(&self) -> Option<&NodeRef> {
+        self.metrics
+            .as_ref()
+            .map(|m| {
+                m.current_leader
+                    .map(|id| self.nodes.get(&id))
+                    .flatten()
+            })
+            .flatten()
+    }
+
+
     #[tracing::instrument(skip(self, _self_addr))]
     fn register_node(
         &mut self,
@@ -156,9 +161,7 @@ impl Network {
         node_info: &NodeInfo,
         _self_addr: Addr<Self>
     ) -> Result<(), NetworkError> {
-        let node_ref = if let Some(node_ref) = self.nodes.get_mut(&node_id) {
-            node_ref
-        } else {
+        if !self.nodes.contains_key(&node_id) {
             let node_ref = NodeRef {
                 id: node_id,
                 info: Some(node_info.clone()),
@@ -166,34 +169,68 @@ impl Network {
             };
             self.nodes.insert(node_id, node_ref);
 
-            match self.nodes.get_mut(&node_id) {
-                Some(nref) => nref,
-                None => {
-                    let err_msg = format!("No node#{} registered in Network#{}.", node_id, self.id);
-                    return Err(NetworkError::Unknown(err_msg))
-                },
-            }
-        };
+            // match self.nodes.get_mut(&node_id) {
+            //     Some(nref) => nref,
+            //     None => {
+            //         let err_msg = format!("No node#{} registered in Network#{}.", node_id, self.id);
+            //         return Err(NetworkError::Unknown(err_msg))
+            //     },
+            // }
+        }
+        let node_ref = self.nodes.get(&node_id)
+            .expect(format!("NodeRef assigned for {}", node_id).as_str());
+
         debug!(network_id = self.id, "Registering node {:?}...", &node_ref);
 
-        if let Some(ref_info) = &node_ref.info {
-            if node_ref.addr.is_none() {
-                info!(network_id = self.id, "Starting node#{}...", node_ref.id);
+        let result = match self.nodes.get_mut(&node_id) {
+            Some(node_ref) => {
+                node_ref.info = Some(node_info.clone());
+                if node_ref.addr.is_none() {
+                    info!(network_id = self.id, "Starting node#{}...", node_ref.id);
 
-                let node = Node::new(
-                    node_ref.id,
-                    self.id,
-                    ref_info.cluster_address.as_str(),
-                    self.info.clone(),
-                );
+                    let node = Node::new(
+                        node_ref.id,
+                        self.id,
+                        node_info.cluster_address.clone(),
+                        self.info.clone(),
+                    );
 
-                node_ref.addr = Some(node.start());
+                    node_ref.addr = Some(node.start());
+                }
+
+                Ok(())
             }
 
-            self.restore_node(node_id);
-        }
+            None => {
+                let err_msg = format!("No node#{} registered in Network#{}.", node_id, self.id);
+                Err(NetworkError::Unknown(err_msg))
+            }
+        };
 
-        Ok(())
+        result
+            .and_then(|res| {
+                self.restore_node(node_id);
+                Ok(res)
+            })
+
+        // if let Some(ref_info) = node_ref.info {
+        //     if node_ref.addr.is_none() {
+        //         info!(network_id = self.id, "Starting node#{}...", node_ref.id);
+        //
+        //         let node = Node::new(
+        //             node_ref.id,
+        //             self.id,
+        //             ref_info.cluster_address.as_str(),
+        //             self.info.clone(),
+        //         );
+        //
+        //         node_ref.addr = Some(node.start());
+        //     }
+        //
+        //     self.restore_node(node_id);
+        // }
+        //
+        // Ok(node_ref.clone())
     }
 
     /// Isolate the network of the specified node.
@@ -410,40 +447,155 @@ impl Handler<GetClusterSummary> for Network {
     }
 }
 
-#[derive(Message, Debug)]
-pub struct Join {
-    pub id: NodeId,
-    pub info: NodeInfo,
-}
+// impl Network {
+//     #[tracing::instrument(skip(self, _ctx))]
+//     fn leader_delegate<M, A, R, E>(&self, msg: M, _ctx: &mut <Network as Actor>::Context) -> ResponseActFuture<A, R, E>
+//     where
+//         M: Message + std::fmt::Debug + Send,
+//         M::Result: Send,
+//         A: Actor,
+//     {
+//         let leader_ref = self.leader_ref();
+//         info!(network_id = self.id, "delegating to leader#{:?}", leader_ref.map(|r| r.id));
+//
+//         let task = match leader_ref {
+//             Some(NodeRef{id, info, addr}) if *id == self.id && addr.is_some() => {
+//                 fut::wrap_future::<_, Self>(addr.unwrap().send(msg))
+//                     .map_err(|err, _, _| NetworkError::from(err))
+//             }
+//
+//             Some(nref) => {
+//                 fut::err(
+//                     if nref.id == self.id {
+//                         NetworkError::Unknown("Local leader node not started".to_string())
+//                     } else if nref.info.is_some() {
+//                         NetworkError::NotLeader {
+//                             leader_id: nref.id,
+//                             leader_address: nref.info.unwrap().cluster_address.to_owned(),
+//                         }
+//                     } else {
+//                         NetworkError::Unknown(format!("Leader#{} info is not registered.", nref.id))
+//                     }
+//                 )
+//             }
+//
+//             None => fut::err(NetworkError::NoElectedLeader),
+//         };
+//
+//         Box::new( task )
+//     }
+// }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct JoinAcknowledged {
-    pub joining_id: NodeId,
-    pub accepted_by: NodeId,
-    //todo WORK HERE
-}
+// impl Handler<RegisterNode> for Network {
+//     type Result = ResponseActFuture<Self, ClusterMembershipChange, NetworkError>;
+//
+//     #[tracing::instrument(skip(self, _ctx))]
+//     fn handle(&mut self, msg: RegisterNode, _ctx: &mut Self::Context) -> Self::Result {
+//         info!(network_id = self.id, "handling Join request...");
+//
+//         let joiner_id = msg.id;
+//         let joiner_info = msg.info.clone();
+//
+//         let delegate = match self.leader_ref() {
+//             Some(NodeRef{id, info: _, addr}) if *id == self.id && addr.is_some() => Ok(addr.clone().unwrap()),
+//
+//             Some(nref) => {
+//                 let err = if nref.id == self.id {
+//                     NetworkError::Unknown("Local leader node not started".to_string())
+//                 } else if nref.info.is_some() {
+//                     let leader_address = nref.info.as_ref().unwrap().cluster_address.to_owned();
+//                     NetworkError::NotLeader {
+//                         leader_id: nref.id,
+//                         leader_address,
+//                     }
+//                 } else {
+//                     NetworkError::Unknown(format!("Leader#{} info is not registered.", nref.id))
+//                 };
+//
+//                 Err(err)
+//             }
+//
+//             None => Err(NetworkError::NoElectedLeader),
+//         };
+//
+//         let task = fut::wrap_future::<_, Self>( futures::future::result(delegate))
+//             .and_then(move |delegate, _, _| {
+//                 fut::wrap_future::<_, Self>(delegate.send(msg.clone()))
+//                     .map_err(|err, _, _| NetworkError::from(err) )
+//             })
+//             .and_then(move |res, net, ctx| {
+//                 net.register_node(joiner_id, &joiner_info, ctx.address());
+//                 fut::result(res)
+//             });
+//
+//         Box::new(task )
+//
+//         // let _change = ChangeClusterConfig { to_add: vec![msg.id], to_remove: vec![], };
+//
+//         //todo: find leader node
+//         //todo: determine network state based on # nodes connected (0=>initialize, 1=>SingleNode, +=>Clustered)
+//         //todo: send Join to leader node
+// //todo: leader's local_node interprets Join into ChangeClusterConfig command;
+//         //todo: and_then register_node( msg.id, msg.info, ctx.address() )
+//     }
+// }
 
-#[derive(Serialize, Deserialize, Message, Clone)]
-pub struct ChangeClusterConfig {
-    pub to_add: Vec<NodeId>,
-    pub to_remove: Vec<NodeId>,
-}
+impl Network {
+    fn leader_delegate(&self) -> Result<Addr<Node>, NetworkError> {
+        match self.leader_ref() {
+            Some(NodeRef{ id, info: _, addr}) if id == &self.id && addr.is_some() => Ok(addr.clone().unwrap()),
 
-impl Handler<Join> for Network {
-    type Result = ();
+            Some(lref) => {
+                Err(
+                    if self.id == lref.id {
+                        NetworkError::Unknown("Local leader node is not started".to_string())
+                    } else if lref.info.is_some() {
+                        NetworkError::NotLeader {
+                            leader_id: lref.id,
+                            leader_address: lref.info.as_ref().unwrap().cluster_address.to_owned(),
+                        }
+                    } else {
+                        NetworkError::Unknown(format!("Leader#{} info is not registered.", lref.id))
+                    }
+                )
+            },
 
-    #[tracing::instrument(skip(self, _ctx))]
-    fn handle(&mut self, msg: Join, _ctx: &mut Self::Context) -> Self::Result {
-        info!(network_id = self.id, "handling Join request...");
-        // let _change = ChangeClusterConfig { to_add: vec![msg.id], to_remove: vec![], };
-
-        //todo: find leader node
-        //todo: determine network state based on # nodes connected (0=>initialize, 1=>SingleNode, +=>Clustered)
-        //todo: send Join to leader node
-//todo: leader's local_node interprets Join into ChangeClusterConfig command;
-        //todo: and_then register_node( msg.id, msg.info, ctx.address() )
+            None => Err(NetworkError::NoElectedLeader),
+        }
     }
 }
+
+impl Handler<RegisterNode> for Network {
+    type Result = ResponseActFuture<Self, ClusterMembershipChange, NetworkError>;
+
+    #[tracing::instrument(skip(self, _ctx))]
+    fn handle(&mut self, msg: RegisterNode, _ctx: &mut Self::Context) -> Self::Result {
+        info!(network_id = self.id, "handling RegisterNode#{} request...", msg.id);
+
+        let joiner_id = msg.id;
+        let joiner_info = msg.info.clone();
+        let delegate = self.leader_delegate();
+
+        let task = fut::wrap_future::<_, Self>(futures::future::result(delegate))
+            .and_then(move |del, _, _| {
+                fut::wrap_future::<_, Self>(del.send(msg.clone()))
+                    .map_err(|err, _, _| NetworkError::from(err))
+            })
+            .and_then(move |res, net, ctx| {
+                let res_cmc = res
+                    .and_then(|cmc| {
+                        info!("Node#{:?} registration acknowledged by leader. Continuing to register connection...", cmc.node_id );
+                        net.register_node(joiner_id, &joiner_info, ctx.address())
+                            .map(|_| cmc)
+                    });
+
+                fut::result(res_cmc)
+            });
+
+        Box::new(task)
+    }
+}
+
 
 #[derive(Message, Debug)]
 pub struct Handshake(pub NodeId, pub NodeInfo);

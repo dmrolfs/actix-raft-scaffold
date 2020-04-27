@@ -16,13 +16,43 @@ use actix_raft_grpc::ports::PortData;
 use actix::spawn;
 use std::collections::BTreeMap;
 
-fn make_node_a() -> NodeInfo {
+const NODE_A_ADDRESS: &str = "127.0.0.1:8000";
+const NODE_B_ADDRESS: &str = "127.0.0.1:8001";
+const NODE_C_ADDRESS: &str = "127.0.0.1:8002";
+
+fn make_node_a(address: SocketAddr) -> NodeInfo {
     NodeInfo {
         name: "node_a".to_string(),
-        cluster_address: "127.0.0.1:8000".to_owned(),
+        cluster_address: address.to_string(), //"127.0.0.1:8000".to_owned(),
         app_address: "127.0.0.1:9000".to_owned(),
         public_address: "127.0.0.1:8080".to_owned(),
     }
+}
+
+fn make_node_b(address: SocketAddr) -> NodeInfo {
+    NodeInfo {
+        name: "node_b".to_string(),
+        cluster_address: address.to_string(), //"127.0.0.1:8001".to_owned(),
+        app_address: "127.0.0.1:9001".to_owned(),
+        public_address: "127.0.0.1:8081".to_owned(),
+    }
+}
+
+fn make_node_c(address: SocketAddr) -> NodeInfo {
+    NodeInfo {
+        name: "node_c".to_string(),
+        cluster_address: address.to_string(), //"127.0.0.1:8002".to_owned(),
+        app_address: "127.0.0.1:9002".to_owned(),
+        public_address: "127.0.0.1:8082".to_owned(),
+    }
+}
+
+fn make_all_nodes() -> Vec<NodeInfo> {
+    vec![
+        make_node_a(NODE_A_ADDRESS.parse().unwrap()),
+        make_node_b(NODE_B_ADDRESS.parse().unwrap()),
+        make_node_c(NODE_C_ADDRESS.parse().unwrap()),
+    ]
 }
 
 fn make_expected_nodes() -> BTreeMap<NodeId, NodeInfo> {
@@ -61,7 +91,7 @@ fn make_test_network(node_info: &NodeInfo) -> Network {
     Network::new(node_id, node_info, ring, discovery)
 }
 
-fn make_test_configuration<S>(host: S) -> Configuration
+fn make_test_configuration<S>(host: S, nodes: Vec<&NodeInfo>) -> Configuration
 where
     S: AsRef<str> + std::fmt::Debug,
 {
@@ -69,23 +99,11 @@ where
     c.set("discovery_host_address", "127.0.0.1:8080").unwrap();
     c.set("join_strategy", "static").unwrap();
     c.set("ring_replicas", 10).unwrap();
+
     c.set::<Vec<std::collections::HashMap<String, String>>>(
         "nodes",
-        vec![
-            make_node_a().into(),
-            NodeInfo {
-                name: "node_b".to_owned(),
-                cluster_address: "127.0.0.1:8001".to_owned(),
-                app_address: "127.0.0.1:9001".to_owned(),
-                public_address: "127.0.0.1:8081".to_owned(),
-            }.into(),
-            NodeInfo {
-                name: "node_c".to_owned(),
-                cluster_address: "127.0.0.1:8002".to_owned(),
-                app_address: "127.0.0.1:9002".to_owned(),
-                public_address: "127.0.0.1:8082".to_owned(),
-            }.into(),
-        ]).unwrap();
+        nodes.iter().map(|n| (*n).clone().into()).collect()
+    ).unwrap();
 
     Configuration::load_from_config(host, c).unwrap()
 }
@@ -126,9 +144,10 @@ fn test_configure_network() {
     let span = span!( Level::INFO, "test_network_bind" );
     let _ = span.enter();
 
-    let node_info = make_node_a();
-
-    let config = make_test_configuration(node_info.clone().name);
+    let node_info = make_node_a(NODE_A_ADDRESS.parse().unwrap());
+    let nodes = make_all_nodes();
+    let nodes_ref = nodes.iter().by_ref().collect();
+    let config = make_test_configuration(node_info.clone().name, nodes_ref);
 
     let mut actual = make_test_network(&node_info);
     actual.configure_with(&config);
@@ -167,8 +186,10 @@ fn test_network_start() {
 
     let sys = System::builder().stop_on_panic(true).name("test").build();
 
-    let node_info = make_node_a();
-    let config = make_test_configuration("node_a");
+    let node_info = make_node_a(NODE_A_ADDRESS.parse().unwrap());
+    let nodes = make_all_nodes();
+    let nodes_ref = nodes.iter().by_ref().collect();
+    let config = make_test_configuration("node_a", nodes_ref);
     let mut network = make_test_network(&node_info);
     network.configure_with(&config);
     let network_addr = network.start();
@@ -220,81 +241,91 @@ fn test_network_start() {
 
 }
 
+use mockito::{mock, server_address};
+
 #[test]
 fn test_network_bind() {
     fixtures::setup_logger();
     let span = span!( Level::INFO, "test_network_bind" );
     let _ = span.enter();
 
-    // actix::System::run( || {
-    //
-    // })
-
     let sys = System::builder().stop_on_panic(true).name("test").build();
 
-    let node_info = make_node_a();
-    let config = make_test_configuration("node_a");
-    let mut network = make_test_network(&node_info);
-    network.configure_with(&config);
-    let network_addr = network.start();
+    let node_a = make_node_a(NODE_A_ADDRESS.parse().unwrap());
+    let node_b = make_node_b(server_address());
 
-    let fib_act = FibActor::new();
-    let fib_addr = fib_act.start();
+    let config = make_test_configuration("node_a", vec![&node_a, &node_b]);
 
-    let data = PortData {
-        fib: fib_addr,
-        network: network_addr.clone(),
-    };
+    let b_path = format!("/api/cluster/nodes/{}", node_b.cluster_address);
+    info!("mock b path = {}", b_path);
+    let nb_mock = mock("POST", b_path.as_str()).expect(1).create();
+    let _nb_bad_mock = mock("POST", "/api/cluster").expect(0).create();
 
-    let network2 = network_addr.clone();
-    let test = network_addr.send(BindEndpoint::new(data))
-        .map_err(|err| {
-            error!("error in bind: {:?}", err);
-            panic!(err)
-        })
-        .and_then( move |_| {
-            network2.send(GetClusterSummary)
-        })
-        .map_err(|err| {
-            error!("error in get cluster summary: {:?}", err);
-            panic!(err)
-        })
-        .and_then(move |res| {
-            let actual = res.unwrap();
-            info!("B: actual cluster summary:{:?}", actual);
+    {
+        let mut network = make_test_network(&node_a);
+        network.configure_with(&config);
+        let network_addr = network.start();
 
-            info!("actual.id: {:?}", actual.id);
-            assert_eq!(actual.id, utils::generate_node_id("127.0.0.1:8000"));
+        let fib_act = FibActor::new();
+        let fib_addr = fib_act.start();
 
-            info!("actual.info: {:?}", actual.info);
-            assert_eq!(actual.info, node_info);
+        let data = PortData {
+            fib: fib_addr,
+            network: network_addr.clone(),
+        };
 
-            info!("actual.isolated_nodes: {:?}", actual.isolated_nodes);
-            assert_eq!(actual.isolated_nodes.is_empty(), true);
+        let network2 = network_addr.clone();
+        let test = network_addr.send(BindEndpoint::new(data))
+            .map_err(|err| {
+                error!("error in bind: {:?}", err);
+                panic!(err)
+            })
+            .and_then( move |_| {
+                network2.send(GetClusterSummary)
+            })
+            .map_err(|err| {
+                error!("error in get cluster summary: {:?}", err);
+                panic!(err)
+            })
+            .and_then(move |res| {
+                let actual = res.unwrap();
+                info!("B: actual cluster summary:{:?}", actual);
 
-            info!("actual.state: {:?}", actual.state);
-            assert_eq!(actual.state.unwrap(), Status::Joining);
-            info!("actual.state.extent: {:?}", actual.state.extent);
-            assert_eq!(actual.state.extent, Extent::Initialized);
+                info!("actual.id: {:?}", actual.id);
+                assert_eq!(actual.id, utils::generate_node_id("127.0.0.1:8000"));
 
-            info!("[{:?}] actual.connected_nodes: {:?}", actual.id ,actual.connected_nodes);
-            assert_eq!(actual.connected_nodes.is_empty(), true);
+                info!("actual.info: {:?}", actual.info);
+                assert_eq!(actual.info, node_a);
 
-            debug_assert!(actual.metrics.is_none(), "no raft metrics");
+                info!("actual.isolated_nodes: {:?}", actual.isolated_nodes);
+                assert_eq!(actual.isolated_nodes.is_empty(), true);
 
-            Ok(())
-        })
-        .then(|res| {
-            info!("test finished -- wrapping up");
-            actix::System::current().stop();
-            res
-        });
+                info!("actual.state: {:?}", actual.state);
+                assert_eq!(actual.state.unwrap(), Status::Joining);
+                info!("actual.state.extent: {:?}", actual.state.extent);
+                assert_eq!(actual.state.extent, Extent::Initialized);
+
+                info!("[{:?}] actual.connected_nodes: {:?}", actual.id ,actual.connected_nodes);
+                assert_eq!(actual.connected_nodes.is_empty(), true);
+
+                debug_assert!(actual.metrics.is_none(), "no raft metrics");
+
+                Ok(())
+            })
+            .then(|res| {
+                info!("test finished -- wrapping up");
+                actix::System::current().stop();
+                res
+            });
 // ;
-    info!("#### BEFORE BLOCK...");
-    // System::current().stop_on_panic();
-    // sys.block_on(test);
-    // info!("#### ... AFTER BLOCK");
-    spawn(test);
+        info!("#### BEFORE BLOCK...");
+        // System::current().stop_on_panic();
+        // sys.block_on(test);
+        // info!("#### ... AFTER BLOCK");
+        spawn(test);
 
-    assert!(sys.run().is_ok(), "error during test");
+        assert!(sys.run().is_ok(), "error during test");
+    }
+
+    nb_mock.assert();
 }

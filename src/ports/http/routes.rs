@@ -5,7 +5,8 @@ use tracing::*;
 use crate::ports::PortData;
 use super::entities::*;
 use crate::fib::Fibonacci;
-use crate::network::{Join, GetClusterSummary};
+use crate::network::{RegisterNode, GetClusterSummary, };
+use crate::ports::http::entities::{ClusterMembershipChange, MembershipAction};
 
 // NodeInfoMessage > ChangeClusterMembershipResponse
 pub fn join_cluster_route(
@@ -13,7 +14,7 @@ pub fn join_cluster_route(
     req: HttpRequest,
     _stream: web::Payload,
     srv: web::Data<Arc<PortData>>,
-) ->  impl Future<Item = HttpResponse, Error = Error> {
+) -> impl Future<Item = HttpResponse, Error = Error> {
     //todo
     let nid = node_id_from_path(&req).expect("valid numerical node id");
 
@@ -24,18 +25,22 @@ pub fn join_cluster_route(
         );
     }
 
-    info!("received join request for node {:?}:{:?}", nid, body);
+    info!("received register node request for node {:?}:{:?}", nid, body);
 
-    let join = Join {
+    let register_node = RegisterNode {
         id: body.node_id.unwrap().into(),
         info: body.node_info.as_ref().unwrap().clone().into(),
     };
 
+
     srv.network
-        .send( join )
+        .send(register_node)
         .map_err( Error::from)
-        .and_then(move |res| {
-            info!("join result = {:?}", res);
+        // .and_then(|res| {
+        //     info!("join result = {:?}", res);
+        //     res
+        // })
+        .and_then(move |_res| {
             info!("and now finding fibonacci...");
 
             srv.fib
@@ -43,11 +48,11 @@ pub fn join_cluster_route(
                 .map_err(Error::from)
                 .and_then(move |res| {
                     info!("fibonacci response: {:?}", res);
-                    let answer = res.unwrap();
+                    let answer = res.unwrap().into();
                     let resp = ChangeClusterMembershipResponse {
                         response: Some(change_cluster_membership_response::Response::Result(
                             ClusterMembershipChange {
-                                node_id: Some(super::entities::NodeId { id: answer }),
+                                node_id: Some(answer),
                                 action: MembershipAction::Added,
                             }
                         ))

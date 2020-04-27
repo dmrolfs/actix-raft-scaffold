@@ -5,7 +5,9 @@ use actix_raft::NodeId;
 use thiserror::Error;
 use tracing::*;
 use strum_macros::{Display as StrumDisplay};
+use serde::{Serialize, Deserialize};
 use crate::NodeInfo;
+use super::messages::{RegisterNode, ClusterMembershipChange, MembershipAction, NetworkError};
 use proximity::*;
 
 mod proximity;
@@ -24,8 +26,28 @@ pub enum NodeError {
         to_remove: Vec<NodeId>,
     },
 
-    #[error("unknown node error")]
-    Unknown,
+    #[error("remote node request failed:{0}")]
+    RemoteNodeSendError(String),
+    // RemoteNodeSendError(actix_web::client::SendRequestError ),
+
+    #[error("failed to parse response from remote node:{0}")]
+    ResponseParseError(#[from] serde_json::Error),
+
+    #[error("remote node response failure: {0}")]
+    ResponseFailure(String),
+
+    #[error("payload error {0:?}", )]
+    PayloadError(String),
+    // PayloadError(actix_web::error::PayloadError),
+
+    #[error("Remote node is not leader. Redirect to node#{leader_id:?} at {leader_address:?}.")]
+    RemoteNotLeaderError {
+        leader_id: Option<NodeId>,
+        leader_address: Option<String>,
+    },
+
+    #[error("unknown node error: {0}")]
+    Unknown(String),
 }
 
 #[derive(Clone)]
@@ -102,9 +124,9 @@ impl Node {
         discovery_address: S
     ) -> Box<dyn ProximityBehavior> {
         if node_id == local_id {
-            Box::new(LocalNode::new())
+            Box::new(LocalNode::new(local_id))
         } else {
-            Box::new(RemoteNode::new(discovery_address))
+            Box::new(RemoteNode::new(node_id, discovery_address))
         }
     }
 
@@ -114,62 +136,6 @@ impl Node {
     // {
     //     proximity.change_cluster_config(to_add, to_remove, ctx);
     // }
-
-    #[tracing::instrument(skip(self, ctx))]
-    fn connect(&mut self, ctx: &mut <Node as Actor>::Context) {
-        if self.status.is_disconnected() {
-            info!("Connecting Node#{} {}...", self.id, self.proximity);
-            let res = self.proximity.connect(self.local_id, &self.local_info, ctx);
-            match res {
-                Ok(_) => {
-                    info!("Connection made local_id#{} to node#{}:{}", self.local_id, self.id, self.proximity);
-                    self.status = NodeStatus::WeaklyConnected;
-                }
-
-                Err(err) => {
-                    //todo consider limiting retries
-                    self.status = match self.status {
-                        NodeStatus::Failure(attempts) => NodeStatus::Failure(attempts + 1),
-                        _status => NodeStatus::Failure(1),
-                    };
-
-                    warn!(
-                        "{:?} in connection attempt local_id#{} => node#{}: {:?}",
-                        self.status, self.local_id, self.id, err
-                    );
-
-                    ctx.run_later(
-                        Duration::from_secs(3),
-                        |_node, ctx| {
-                            ctx.notify(Connect);
-                        });
-                }
-            }
-        }
-    }
-
-    #[tracing::instrument(skip(self, ctx))]
-    fn disconnect(&mut self, ctx: &mut <Node as Actor>::Context) {
-        if self.status.is_connected() == true {
-            info!("Disconnecting Node #{} from {}.", self.id, self.proximity);
-            let res = self.proximity.disconnect(ctx);
-            match res {
-                Ok(_) => {
-                    info!("Disconnection of local_id#{} from #{}:{}", self.local_id, self.id, self.proximity);
-                    self.status = NodeStatus::Disconnected;
-                }
-
-                Err(err) => {
-                    self.status = match self.status {
-                        NodeStatus::Failure(attempts) => NodeStatus::Failure(attempts + 1),
-                        _status => NodeStatus::Failure(1),
-                    };
-
-                    warn!("Error in disconnection of local_id#{} from node#{}: {:?}", self.local_id, self.id, err);
-                }
-            }
-        }
-    }
 }
 
 impl Debug for Node {
@@ -202,15 +168,30 @@ impl Actor for Node {
 struct Connect;
 
 impl Message for Connect {
-    type Result = Result<(), NodeError>;
+    type Result = ();
+    // type Result = Result<(), NodeError>;
 }
 
 impl Handler<Connect> for Node {
-    type Result = ResponseActFuture<Self, (), NodeError>;
+    type Result = ();
+    // type Result = ResponseActFuture<Self, (), NodeError>;
 
     #[tracing::instrument(skip(self, ctx))]
     fn handle(&mut self, _msg: Connect, ctx: &mut Self::Context) -> Self::Result {
-        Box::new( fut::result(Ok(self.connect(ctx))))
+        let task = self.connect(ctx)
+            .map_err(|err, node, _| {
+                warn!("error during connection to remote node#{}:{}", node.id, err);
+            })
+            .and_then(|res, node, ctx| {
+                node.handle_connect_result(ctx, res)
+            });
+
+        ctx.spawn(task);
+
+        // let task = fut::wrap_future::<_, Self>(self.connect(ctx))
+        //     .and_then(|_, _, _| ());
+        // Box::new(task)
+
         // self.connect(ctx);
         // ctx.run_later(self.heartbeat_interval, |node, ctx| {
         //     node.connect(ctx);
@@ -218,6 +199,103 @@ impl Handler<Connect> for Node {
         // });
     }
 }
+
+impl Node {
+    #[tracing::instrument(skip(self, _ctx))]
+    fn handle_connect_result(
+        &mut self,
+        _ctx: &mut <Node as Actor>::Context,
+        res: Option<ClusterMembershipChange>
+    ) -> impl ActorFuture<Actor=Self, Item=(), Error=()> {
+        info!("connection made to remote node#{}: {:?}", self.id, res);
+        fut::ok(())
+    }
+}
+
+// impl Node {
+//     #[tracing::instrument(skip(self, ctx))]
+//     fn connect(
+//         &mut self,
+//         ctx: &mut Context<Self>
+//     ) -> Box<dyn Future<Item = Option<ClusterMembershipChange>, Error = NodeError>>{
+//         if self.status.is_connected() {
+//             return Box::new(futures::future::ok::<Option<ClusterMembershipChange>, NodeError>(None));
+//         } else {
+//             info!("Connecting Node#{} {}...", self.id, self.proximity);
+//             let task = self.proximity.connect(self.local_id, &self.local_info, ctx)
+//                 .map_err(|err| {
+//                     //todo consider limiting retries
+//                     self.status = match self.status {
+//                         NodeStatus::Failure(attempts) => NodeStatus::Failure(attempts + 1),
+//                         _status => NodeStatus::Failure(1),
+//                     };
+//
+//                     warn!(
+//                         "{:?} in connection attempt local_id#{} => node#{}: {:?}",
+//                         self.status, self.local_id, self.id, err
+//                     );
+//
+//                     ctx.run_later(
+//                         Duration::from_secs(3),
+//                         |_node, ctx| { ctx.notify(Connect); }
+//                     );
+//
+//                     err
+//                 })
+//                 .and_then(|cmc| {
+//                     info!("Connection made local_id#{} to node#{}:{}", self.local_id, self.id, self.proximity);
+//                     self.status = NodeStatus::WeaklyConnected;
+//                     Ok(Some(cmc))
+//                 });
+//
+//             return Box::new(futures::future::result(task));
+//         }
+//     }
+// }
+
+impl Node {
+    #[tracing::instrument(skip(self, ctx))]
+    fn connect(
+        &mut self,
+        ctx: &mut Context<Self>
+    ) -> impl ActorFuture<Actor=Self, Item=Option<ClusterMembershipChange>, Error=NodeError> {
+        if self.status.is_connected() {
+            return fut::ok(None);
+        } else {
+            info!("Connecting Node#{} {}...", self.id, self.proximity);
+            let task = self.proximity.connect(self.local_id, &self.local_info, ctx)
+                .map_err(|err| {
+                    //todo consider limiting retries
+                    self.status = match self.status {
+                        NodeStatus::Failure(attempts) => NodeStatus::Failure(attempts + 1),
+                        _status => NodeStatus::Failure(1),
+                    };
+
+                    warn!(
+                        "{:?} in connection attempt local_id#{} => node#{}: {:?}",
+                        self.status, self.local_id, self.id, err
+                    );
+
+                    ctx.run_later(
+                        Duration::from_secs(3),
+                        |_node, ctx| { ctx.notify(Connect); }
+                    );
+
+                    err
+                })
+                .and_then(|cmc| {
+                    info!("Connection made local_id#{} to node#{}:{}", self.local_id, self.id, self.proximity);
+                    self.status = NodeStatus::WeaklyConnected;
+                    Ok(Some(cmc))
+                });
+
+            return fut::result(task);
+        }
+    }
+}
+
+
+
 
 #[derive(Debug)]
 pub struct Disconnect;
@@ -235,10 +313,49 @@ impl Handler<Disconnect> for Node {
     }
 }
 
-#[derive(Debug)]
+impl Node {
+    #[tracing::instrument(skip(self, ctx))]
+    fn disconnect(&mut self, ctx: &mut <Node as Actor>::Context) {
+        if self.status.is_connected() == true {
+            info!("Disconnecting Node #{} from {}.", self.id, self.proximity);
+            let res = self.proximity.disconnect(ctx);
+            match res {
+                Ok(_) => {
+                    info!("Disconnection of local_id#{} from #{}:{}", self.local_id, self.id, self.proximity);
+                    self.status = NodeStatus::Disconnected;
+                }
+
+                Err(err) => {
+                    self.status = match self.status {
+                        NodeStatus::Failure(attempts) => NodeStatus::Failure(attempts + 1),
+                        _status => NodeStatus::Failure(1),
+                    };
+
+                    warn!("Error in disconnection of local_id#{} from node#{}: {:?}", self.local_id, self.id, err);
+                }
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct ChangeClusterConfig {
-    to_add: Vec<NodeId>,
-    to_remove: Vec<NodeId>,
+    add_members: Vec<NodeId>,
+    remove_members: Vec<NodeId>,
+}
+
+impl ChangeClusterConfig {
+    pub fn new_to_add_remove(to_add: Vec<NodeId>, to_remove: Vec<NodeId>) -> Self {
+        Self { add_members: to_add, remove_members: to_remove, }
+    }
+
+    pub fn new_to_add(to_add: Vec<NodeId>) -> Self {
+        ChangeClusterConfig::new_to_add_remove(to_add, vec![])
+    }
+
+    pub fn new_to_remove(to_remove: Vec<NodeId>) -> Self {
+        ChangeClusterConfig::new_to_add_remove(vec![], to_remove)
+    }
 }
 
 impl Message for ChangeClusterConfig {
@@ -250,6 +367,94 @@ impl Handler<ChangeClusterConfig> for Node {
 
     #[tracing::instrument]
     fn handle(&mut self, msg: ChangeClusterConfig, ctx: &mut Self::Context) -> Self::Result {
-        self.proximity.change_cluster_config(msg.to_add, msg.to_remove, ctx)
+        self.proximity.change_cluster_config(msg.add_members, msg.remove_members, ctx)
+    }
+}
+
+impl Node {
+    #[tracing::instrument]
+    fn join_node(&self, node_id: NodeId, ctx: &<Node as Actor>::Context) -> Result<(), NodeError>{
+        self.proximity.change_cluster_config(vec![node_id], vec![], ctx)
+    }
+}
+
+impl Handler<RegisterNode> for Node {
+    type Result = ResponseActFuture<Self, ClusterMembershipChange, NetworkError>;
+
+    #[tracing::instrument(skip(self, ctx))]
+    fn handle(&mut self, msg: RegisterNode, ctx: &mut Self::Context) -> Self::Result {
+        let change_msg = ChangeClusterConfig::new_to_add(vec![msg.id]);
+
+        let task = fut::wrap_future::<_, Self>(ctx.address().send(change_msg))
+            .map_err(|err, _, _| NetworkError::from(err))
+            .and_then(move |res, node, _| {
+                info!(node_id = node.id, "node#{} join submitted to RAFT cluster: {:?}", msg.id, &msg.info);
+                fut::result(
+                    res
+                        .map_err(|err| NetworkError::from(err))
+                        .map(|_| {
+                            ClusterMembershipChange {
+                                node_id: Some(msg.id),
+                                action: MembershipAction::Joining,
+                            }
+                        })
+                )
+            });
+
+        Box::new(task)
+
+
+        // let req = ctx.address().send(change_msg)
+        //     .map_err(|err| NetworkError::From(err));
+        //
+        // let task = fut::wrap_future::<_, Self>(req)
+        //     // .map_err()
+        //     // .map_err(|err, _, _| NetworkError::from(err))
+        //     .and_then(move |res, node, ctx| {
+        //         info!(node_id = node.id, "node#{} join submitted to RAFT cluster: {:?}", msg.id, &msg.info);
+        //
+        //         fut::result(
+        //             res
+        //                 .map(|_| {
+        //                     ClusterMembershipChange {
+        //                         node_id: Some(msg.id),
+        //                         action: MembershipAction::Joining,
+        //                     }
+        //                 })
+        //         )
+        //     });
+        //
+        // Box::new(task)
+        //
+
+        // let req = ctx.address().send(change_msg.clone())
+        //     .map_err(|err| NetworkError::from(err))
+        //     .and_then(move |res| {
+        //         info!(node_id = node.id, "node#{} join submitted to RAFT cluster: {:?}", msg.id, &msg.info);
+        //         ClusterMembershipChange {
+        //             node_id: Some(msg.id),
+        //             action: MembershipAction::Joining,
+        //         }
+        //     });
+        //
+        // Box::new(fut::wrap_future::<_, Self>(req))
+        // let task = fut::wrap_future::<_, Self>()
+        //     .map_err(|err, _, _| NetworkError::from(err))
+        //     .and_then(move |res, node, _ctx| {
+        //         info!(node_id = node.id, "node#{} join submitted to RAFT cluster: {:?}", msg.id, &msg.info);
+        //
+        //         fut::result(
+        //             res
+        //                 .map_err(|err| NetworkError::from(err) )
+        //                 .map(|_| {
+        //                     ClusterMembershipChange {
+        //                         node_id: Some(msg.id),
+        //                         action: MembershipAction::Joining,
+        //                     }
+        //                 })
+        //         )
+        //     });
+        //
+        // Box::new(task)
     }
 }

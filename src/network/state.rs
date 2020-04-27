@@ -14,6 +14,7 @@ pub enum StateError {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct StatusEntry {
     status: Status,
     entry: DateTime<Utc>,
