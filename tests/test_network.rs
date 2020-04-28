@@ -1,8 +1,11 @@
 mod fixtures;
 
 use std::net::SocketAddr;
-// use rayon::prelude::*;
+use actix::spawn;
+use std::collections::BTreeMap;
 use tracing::*;
+use mockito::{mock, server_address, Matcher};
+
 use ::config::Config;
 use actix::prelude::*;
 use actix_raft::NodeId;
@@ -12,9 +15,8 @@ use actix_raft_grpc::network::{Network, BindEndpoint, GetClusterSummary};
 use actix_raft_grpc::network::state::{Extent, Status};
 use actix_raft_grpc::config::Configuration;
 use actix_raft_grpc::fib::FibActor;
-use actix_raft_grpc::ports::PortData;
-use actix::spawn;
-use std::collections::BTreeMap;
+use actix_raft_grpc::ports::{PortData, http::entities};
+
 
 const NODE_A_ADDRESS: &str = "127.0.0.1:8000";
 const NODE_B_ADDRESS: &str = "127.0.0.1:8001";
@@ -241,8 +243,6 @@ fn test_network_start() {
 
 }
 
-use mockito::{mock, server_address};
-
 #[test]
 fn test_network_bind() {
     fixtures::setup_logger();
@@ -256,9 +256,36 @@ fn test_network_bind() {
 
     let config = make_test_configuration("node_a", vec![&node_a, &node_b]);
 
-    let b_path = format!("/api/cluster/nodes/{}", node_b.cluster_address);
-    info!("mock b path = {}", b_path);
-    let nb_mock = mock("POST", b_path.as_str()).expect(1).create();
+    let node_b_id = crate::utils::generate_node_id(node_b.cluster_address);
+    let b_path_exp = format!("/api/cluster/nodes/{}", node_b_id );
+    info!("mock b path = {}", b_path_exp);
+
+    let e_1 = entities::ChangeClusterMembershipResponse {
+        response: Some(entities::change_cluster_membership_response::Response::Result(
+            entities::ClusterMembershipChange {
+                node_id: Some(entities::NodeId { id: node_b_id }),
+                action: entities::MembershipAction::Added,
+            }
+        ))
+    };
+    info!("mock b e_1:{:?} = json:{:?}", e_1, serde_json::to_string(&e_1));
+
+    let b_resp = format!(
+        "{}{}{}",
+        r#"{"response":{"result":{"nodeId":{"id":"#,
+        node_b_id,
+        r#"},"action":"Added"}}}"#
+    );
+    info!("mock b resp = {}", b_resp);
+    let expected = serde_json::from_str::<entities::ChangeClusterMembershipResponse>(b_resp.as_str());
+    info!("json parsing expected body: {:?}", expected);
+    assert!(expected.is_ok());
+
+    let nb_mock = mock( "POST", Matcher::Regex(b_path_exp))
+        .with_body(b_resp)
+        .expect(1)
+        .create();
+    // let nb_mock = mock("POST", b_path.as_str()).expect(1).create();
     let _nb_bad_mock = mock("POST", "/api/cluster").expect(0).create();
 
     {

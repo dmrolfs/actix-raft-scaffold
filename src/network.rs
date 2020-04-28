@@ -190,8 +190,8 @@ impl Network {
 
                     let node = Node::new(
                         node_ref.id,
+                        node_info.clone(),
                         self.id,
-                        node_info.cluster_address.clone(),
                         self.info.clone(),
                     );
 

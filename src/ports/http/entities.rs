@@ -348,6 +348,7 @@ pub mod change_cluster_membership_response {
     use serde::{Serialize, Deserialize};
 
     #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
     pub enum Response {
         Result(super::ClusterMembershipChange),
         Failure(super::Failure),

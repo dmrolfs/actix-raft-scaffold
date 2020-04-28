@@ -1,6 +1,7 @@
 use std::fmt::{Debug, Display};
 use actix::prelude::*;
 use actix_raft::NodeId;
+use tracing::*;
 use crate::NodeInfo;
 use super::{Node, NodeError};
 use crate::ports::http::entities::NodeInfoMessage;
@@ -17,24 +18,14 @@ pub trait ChangeClusterBehavior {
 }
 
 pub trait ConnectionBehavior {
-    fn remote_id(&self) -> NodeId;
-
     //todo: make nonblocking because of distributed network calls
-    #[tracing::instrument(skip(self, _ctx))]
     fn connect(
         &mut self,
-        local_id: NodeId,
-        _local_info: &NodeInfo,
-        _ctx: &mut <Node as Actor>::Context
-    ) -> Result<messages::ClusterMembershipChange, NodeError> {
-        Ok(messages::ClusterMembershipChange {
-            node_id: Some(local_id.into()),
-            action: messages::MembershipAction::Joining,
-        })
-    }
+        local_id_info: (NodeId, &NodeInfo),
+        ctx: &mut <Node as Actor>::Context
+    ) -> Result<messages::ClusterMembershipChange, NodeError>;
 
     //todo: make nonblocking because of distributed network calls
-    #[tracing::instrument(skip(self, _ctx))]
     fn disconnect(&mut self, _ctx: &mut <Node as Actor>::Context) -> Result<(), NodeError> {
         Ok(())
     }
@@ -79,32 +70,46 @@ impl ChangeClusterBehavior for LocalNode {
 }
 
 impl ConnectionBehavior for LocalNode {
-    fn remote_id(&self) -> NodeId { self.id }
+    #[tracing::instrument(skip(self, local_id_info, _ctx))]
+    fn connect(
+        &mut self,
+        local_id_info: (NodeId, &NodeInfo),
+        _ctx: &mut <Node as Actor>::Context
+    ) -> Result<messages::ClusterMembershipChange, NodeError> {
+        debug!("connect for local Node#{}->{}", local_id_info.0, self.id);
+        Ok(messages::ClusterMembershipChange {
+            node_id: Some(self.id.into()),
+            action: messages::MembershipAction::Joining,
+        })
+    }
 }
 
 pub struct RemoteNode {
     remote_id: NodeId,
-    scope: String,
+    remote_info: NodeInfo,
 }
 
 impl RemoteNode {
     #[tracing::instrument]
-    pub fn new<S: AsRef<str> + Debug>(remote_id: NodeId, discovery_address: S) -> RemoteNode {
+    pub fn new(remote_id: NodeId, remote_info: NodeInfo) -> RemoteNode {
+        RemoteNode { remote_id, remote_info, }
+    }
+
+    fn scope(&self) -> String {
         //todo: use encryption
-        let scope = format!("http://{}/api/cluster", discovery_address.as_ref());
-        RemoteNode { remote_id, scope, }
+        format!("http://{}/api/cluster", self.remote_info.cluster_address.as_str())
     }
 }
 
 impl Display for RemoteNode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "RemoteNode#{}(to:{})", self.remote_id, self.scope)
+        write!(f, "RemoteNode#{}(to:{})", self.remote_id, self.scope())
     }
 }
 
 impl Debug for RemoteNode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "RemoteNode#{}(to:{})", self.remote_id, self.scope)
+        write!(f, "RemoteNode#{}(to:{})", self.remote_id, self.scope())
     }
 }
 
@@ -128,27 +133,38 @@ impl ChangeClusterBehavior for RemoteNode {
 
 
 impl ConnectionBehavior for RemoteNode {
-    fn remote_id(&self) -> NodeId { self.remote_id }
-
-    #[tracing::instrument(skip(self, _ctx))]
+    #[tracing::instrument(skip(self, local_id_info, _ctx))]
     fn connect(
         &mut self,
-        local_id: NodeId,
-        local_info: &NodeInfo,
+        local_id_info: (NodeId, &NodeInfo),
         _ctx: &mut <Node as Actor>::Context
     ) -> Result<messages::ClusterMembershipChange, NodeError> {
-        let register_node_route = format!("http://{}/api/cluster/nodes/{}", local_info.cluster_address, local_id);
+        let register_node_route = format!("{}/nodes/{}", self.scope(), self.remote_id);
+        debug!("connect Node#{} to RemoteNode#{} via {}", local_id_info.0, self.remote_id, register_node_route);
+
         let body = NodeInfoMessage {
-            node_id: Some(local_id.into()),
-            node_info: Some(local_info.clone().into()),
+            node_id: Some(local_id_info.0.into()),
+            node_info: Some(local_id_info.1.clone().into()),
         };
 
+        let self_rep = self.to_string();
         reqwest::Client::new()
             .post(&register_node_route)
             .json(&body)
             .send()
             .map_err(|err| NodeError::RemoteNodeSendError(err.to_string()))
             .and_then(|mut res| {
+                debug!("connect_to_{} response payload: |{:?}|", self_rep, res);
+                debug!("connect_to_{} response body: |{:?}|", self_rep, res.text());
+
+                let foo = res.text()
+                    .map_err(|err| NodeError::Unknown(format!("from response error: {}",err.to_string())))
+                    .and_then(|body| {
+                        serde_json::from_str::<entities::ChangeClusterMembershipResponse>(body.as_str())
+                            .map_err(|err| NodeError::Unknown(format!("from json error: {}", err.to_string())))
+                    });
+                error!("FOO = {:?}", foo);
+
                 res.json::<entities::ChangeClusterMembershipResponse>()
                     .map_err(|err| NodeError::Unknown(err.to_string()))
                     .and_then(|cresp| {

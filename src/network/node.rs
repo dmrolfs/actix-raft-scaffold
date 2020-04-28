@@ -96,16 +96,16 @@ pub struct Node {
 
 impl Node {
     #[tracing::instrument]
-    pub fn new<S: AsRef<str> + Debug>(
+    pub fn new(
         id: NodeId,
+        info: NodeInfo,
         local_id: NodeId,
-        discovery_address: S,
         local_info: NodeInfo,
         // heartbeat_interval: Duration,
     ) -> Self {
-        let proximity = Node::determine_proximity(id, local_id, discovery_address);
+        let proximity = Node::determine_proximity(local_id, id, &info);
 
-        info!("Registering NODE id:{} @ {} => {}", id, local_id, proximity);
+        info!("[Node#{}] Creating Node#{} as {}", local_id, id, proximity);
 
         Node {
             id,
@@ -118,15 +118,15 @@ impl Node {
     }
 
     #[tracing::instrument]
-    fn determine_proximity<S: AsRef<str> + Debug>(
-        node_id: NodeId,
+    fn determine_proximity(
         local_id: NodeId,
-        discovery_address: S
+        node_id: NodeId,
+        node_info: &NodeInfo
     ) -> Box<dyn ProximityBehavior> {
         if node_id == local_id {
             Box::new(LocalNode::new(local_id))
         } else {
-            Box::new(RemoteNode::new(node_id, discovery_address))
+            Box::new(RemoteNode::new(node_id, node_info.clone()))
         }
     }
 
@@ -183,7 +183,7 @@ impl Handler<Connect> for Node {
                 warn!("error during connection to remote node#{}:{}", node.id, err);
             })
             .and_then(|res, node, ctx| {
-                node.handle_connect_result(ctx, res)
+                node.handle_connect_result(res, ctx)
             });
 
         ctx.spawn(task);
@@ -201,13 +201,13 @@ impl Handler<Connect> for Node {
 }
 
 impl Node {
-    #[tracing::instrument(skip(self, _ctx))]
+    #[tracing::instrument(skip(self, res, _ctx))]
     fn handle_connect_result(
         &mut self,
-        _ctx: &mut <Node as Actor>::Context,
-        res: Option<ClusterMembershipChange>
+        res: Option<ClusterMembershipChange>,
+        _ctx: &mut <Node as Actor>::Context
     ) -> impl ActorFuture<Actor=Self, Item=(), Error=()> {
-        info!("connection made to remote node#{}: {:?}", self.id, res);
+        info!("connection made to node#{}: {:?}", self.id, res);
         fut::ok(())
     }
 }
@@ -262,8 +262,8 @@ impl Node {
         if self.status.is_connected() {
             return fut::ok(None);
         } else {
-            info!("Connecting Node#{} {}...", self.id, self.proximity);
-            let task = self.proximity.connect(self.local_id, &self.local_info, ctx)
+            info!("Connecting Node#{}({:?}) to {}...", self.local_id, self.status, self.proximity);
+            let task = self.proximity.connect((self.local_id, &self.local_info), ctx)
                 .map_err(|err| {
                     //todo consider limiting retries
                     self.status = match self.status {
@@ -278,13 +278,16 @@ impl Node {
 
                     ctx.run_later(
                         Duration::from_secs(3),
-                        |_node, ctx| { ctx.notify(Connect); }
+                        |node, ctx| {
+                            debug!("after delay trying again to connect to {}...", node.proximity);
+                            ctx.notify(Connect);
+                        }
                     );
 
                     err
                 })
                 .and_then(|cmc| {
-                    info!("Connection made local_id#{} to node#{}:{}", self.local_id, self.id, self.proximity);
+                    info!("Connection made local#{} to {}", self.local_id, self.proximity);
                     self.status = NodeStatus::WeaklyConnected;
                     Ok(Some(cmc))
                 });
