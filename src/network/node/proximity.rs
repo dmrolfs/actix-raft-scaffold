@@ -7,6 +7,7 @@ use super::{Node, NodeError};
 use crate::ports::http::entities::NodeInfoMessage;
 use crate::network::messages;
 use crate::ports::http::entities::{self, change_cluster_membership_response as entities_response};
+use crate::network::node::NodeError::RemoteNotLeaderError;
 
 pub trait ChangeClusterBehavior {
     fn change_cluster_config(
@@ -23,12 +24,10 @@ pub trait ConnectionBehavior {
         &mut self,
         local_id_info: (NodeId, &NodeInfo),
         ctx: &mut <Node as Actor>::Context
-    ) -> Result<messages::ClusterMembershipChange, NodeError>;
+    ) -> Result<messages::ConnectionAcknowledged, NodeError>;
 
     //todo: make nonblocking because of distributed network calls
-    fn disconnect(&mut self, _ctx: &mut <Node as Actor>::Context) -> Result<(), NodeError> {
-        Ok(())
-    }
+    fn disconnect(&mut self, _ctx: &mut <Node as Actor>::Context) -> Result<(), NodeError>;
 }
 
 
@@ -75,24 +74,31 @@ impl ConnectionBehavior for LocalNode {
         &mut self,
         local_id_info: (NodeId, &NodeInfo),
         _ctx: &mut <Node as Actor>::Context
-    ) -> Result<messages::ClusterMembershipChange, NodeError> {
+    ) -> Result<messages::ConnectionAcknowledged, NodeError> {
         debug!("connect for local Node#{}->{}", local_id_info.0, self.id);
-        Ok(messages::ClusterMembershipChange {
-            node_id: Some(self.id.into()),
-            action: messages::MembershipAction::Joining,
-        })
+        Ok(messages::ConnectionAcknowledged {})
+    }
+
+    #[tracing::instrument(skip(self, _ctx))]
+    fn disconnect(&mut self, _ctx: &mut <Node as Actor>::Context) -> Result<(), NodeError> {
+        Ok(())
     }
 }
 
 pub struct RemoteNode {
     remote_id: NodeId,
     remote_info: NodeInfo,
+    client: reqwest::Client,
 }
 
 impl RemoteNode {
     #[tracing::instrument]
     pub fn new(remote_id: NodeId, remote_info: NodeInfo) -> RemoteNode {
-        RemoteNode { remote_id, remote_info, }
+        let client = reqwest::Client::builder()
+            .build()
+            .expect(format!("prebuilt client for RemoteNode#{}", remote_id).as_str());
+
+        RemoteNode { remote_id, remote_info, client, }
     }
 
     fn scope(&self) -> String {
@@ -132,13 +138,41 @@ impl ChangeClusterBehavior for RemoteNode {
 }
 
 
+impl RemoteNode {
+    fn convert_error( &self, error: reqwest::Error ) -> NodeError {
+        match error {
+            e if e.is_timeout() => NodeError::Timeout(e.to_string()),
+            e if e.is_serialization() => NodeError::ResponseFailure(e.to_string()),
+            e if e.is_client_error() => NodeError::RequestError(e),
+            e if e.is_http() => NodeError::RequestError(e),
+            e if e.is_server_error() => {
+                NodeError::ResponseFailure(format!("Error in {:?} server", self))
+            },
+            e if e.is_redirect() => {
+                // need to parse redirect into:
+                // NodeError::RemoteNotLeaderError {
+                //         leader_id: Option<NodeId>,
+                //         leader_address: Option<String>,
+                //     }
+                NodeError::Unknown(
+                    format!(
+                        "TODO: PROPERLY HANDLE REDIRECT; E.G., IF REMOTE IS NOT LEADER: {:?}",
+                        e
+                    )
+                )
+            },
+            e => NodeError::from(e),
+        }
+    }
+}
+
 impl ConnectionBehavior for RemoteNode {
     #[tracing::instrument(skip(self, local_id_info, _ctx))]
     fn connect(
         &mut self,
         local_id_info: (NodeId, &NodeInfo),
         _ctx: &mut <Node as Actor>::Context
-    ) -> Result<messages::ClusterMembershipChange, NodeError> {
+    ) -> Result<messages::ConnectionAcknowledged, NodeError> {
         let register_node_route = format!("{}/nodes/{}", self.scope(), self.remote_id);
         debug!("connect Node#{} to RemoteNode#{} via {}", local_id_info.0, self.remote_id, register_node_route);
 
@@ -148,46 +182,43 @@ impl ConnectionBehavior for RemoteNode {
         };
 
         let self_rep = self.to_string();
-        reqwest::Client::new()
+        let result = self.client
+            // .get("https://my-json-server.typicode.com/dmrolfs/json-test-server/connection")
             .post(&register_node_route)
             .json(&body)
             .send()
-            .map_err(|err| NodeError::RemoteNodeSendError(err.to_string()))
-            .and_then(|mut res| {
-                debug!("connect_to_{} response payload: |{:?}|", self_rep, res);
-                debug!("connect_to_{} response body: |{:?}|", self_rep, res.text());
+            .map_err(|err| self.convert_error(err))?
+            .json::<entities::ChangeClusterMembershipResponse>()
+            .map_err(|err| self.convert_error(err))
+            .and_then(|cresp| {
+                debug!("SUCCESS connect_to_{} PARSED response: |{:?}|", self_rep, cresp);
 
-                let foo = res.text()
-                    .map_err(|err| NodeError::Unknown(format!("from response error: {}",err.to_string())))
-                    .and_then(|body| {
-                        serde_json::from_str::<entities::ChangeClusterMembershipResponse>(body.as_str())
-                            .map_err(|err| NodeError::Unknown(format!("from json error: {}", err.to_string())))
-                    });
-                error!("FOO = {:?}", foo);
-
-                res.json::<entities::ChangeClusterMembershipResponse>()
-                    .map_err(|err| NodeError::Unknown(err.to_string()))
-                    .and_then(|cresp| {
-                        if let Some(response) = cresp.response {
-                            match response {
-                                entities_response::Response::Result(cmc) => Ok(cmc.into()),
-
-                                entities_response::Response::Failure(f) => {
-                                    Err(NodeError::ResponseFailure(f.description))
-                                }
-
-                                entities_response::Response::CommandRejectedNotLeader(leader) => {
-                                    Err(NodeError::RemoteNotLeaderError {
-                                        leader_id: Some(leader.leader_id.into()),
-                                        leader_address: Some(leader.leader_address.to_owned()),
-                                    })
-                                }
-                            }
-                        } else {
-                            Err(NodeError::Unknown("good ChangeClusterResponse had empty response".to_string()))
+                let ack = if let Some(response) = cresp.response {
+                    match response {
+                        entities_response::Response::Result(r) => {
+                            let ack: messages::ConnectionAcknowledged = r.into();
+                            Ok(ack)
                         }
-                    })
-            })
+
+                        entities_response::Response::Failure(f) => {
+                            Err(NodeError::ResponseFailure(f.description))
+                        }
+
+                        entities_response::Response::CommandRejectedNotLeader(leader) => {
+                            Err(NodeError::RemoteNotLeaderError {
+                                leader_id: Some(leader.leader_id.into()),
+                                leader_address: Some(leader.leader_address.to_owned()),
+                            })
+                        }
+                    }
+                } else {
+                    Err(NodeError::Unknown("good ChangeClusterResponse had empty response".to_string()))
+                };
+
+                ack
+            })?;
+
+        Ok(result)
     }
 
     // #[tracing::instrument(skip(self, _ctx))]
@@ -330,7 +361,9 @@ impl ConnectionBehavior for RemoteNode {
     //     // Box::new(task)
     // }
 
+    #[tracing::instrument(skip(self, _ctx))]
     fn disconnect(&mut self, _ctx: &mut <Node as Actor>::Context) -> Result<(), NodeError> {
-        unimplemented!()
+        info!("disconnecting {:?}", self);
+        Ok(())
     }
 }

@@ -22,10 +22,10 @@ pub enum NetworkError {
     #[error("error in actor mailbox {0}")]
     ActorMailBoxError(#[from] actix::MailboxError),
 
-    #[error("request made to non-leader node (id#{leader_id}, address:{leader_address}")]
+    #[error("request made to non-leader node (id#{leader_id:?}, address:{leader_address:?}")]
     NotLeader {
-        leader_id: NodeId,
-        leader_address: String,
+        leader_id: Option<NodeId>,
+        leader_address: Option<String>,
     },
 
     #[error("no elected RAFT leader")]
@@ -40,15 +40,18 @@ pub enum NetworkError {
 
 
 
-#[derive(Debug, Clone)]
-pub struct RegisterNode {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConnectNode {
     pub id: NodeId,
     pub info: NodeInfo,
 }
 
-impl Message for RegisterNode {
-    type Result = Result<ClusterMembershipChange, NetworkError>;
+impl Message for ConnectNode {
+    type Result = Result<ConnectionAcknowledged, NetworkError>;
 }
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct ConnectionAcknowledged {}
 
 #[derive(Debug, StrumDisplay, Serialize, Deserialize, Clone, Copy)]
 #[serde(rename_all = "camelCase")]

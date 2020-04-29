@@ -262,9 +262,9 @@ fn test_network_bind() {
 
     let e_1 = entities::ChangeClusterMembershipResponse {
         response: Some(entities::change_cluster_membership_response::Response::Result(
-            entities::ClusterMembershipChange {
+            entities::ConnectionAcknowledged {
                 node_id: Some(entities::NodeId { id: node_b_id }),
-                action: entities::MembershipAction::Added,
+                // action: entities::MembershipAction::Added,
             }
         ))
     };
@@ -276,12 +276,26 @@ fn test_network_bind() {
         node_b_id,
         r#"},"action":"Added"}}}"#
     );
-    info!("mock b resp = {}", b_resp);
-    let expected = serde_json::from_str::<entities::ChangeClusterMembershipResponse>(b_resp.as_str());
-    info!("json parsing expected body: {:?}", expected);
-    assert!(expected.is_ok());
+    let b_resp_PARSED = serde_json::from_str::<entities::ChangeClusterMembershipResponse>(b_resp.as_str());
+    let b_resp_SLICED = serde_json::from_slice::<entities::ChangeClusterMembershipResponse>( b_resp.as_bytes() );
+    info!("mock b resp = |{}|", b_resp);
+
+    let expected = entities::ChangeClusterMembershipResponse {
+        response: Some(entities::change_cluster_membership_response::Response::Result(
+            entities::ConnectionAcknowledged {
+                node_id: Some(entities::NodeId{id: node_b_id}),
+                // action: entities::MembershipAction::Added,
+            }
+        ))
+    };
+    let expected_rep = serde_json::to_string(&expected);
+    assert!(b_resp_PARSED.is_ok());
+    let parsed = b_resp_SLICED.unwrap();
+    info!("json parsing expected body:\n{:?}\n{:?}", expected, parsed);
+    assert_eq!(parsed, expected);
 
     let nb_mock = mock( "POST", Matcher::Regex(b_path_exp))
+        .with_header("content-type", "application/json")
         .with_body(b_resp)
         .expect(1)
         .create();
@@ -328,12 +342,15 @@ fn test_network_bind() {
                 assert_eq!(actual.isolated_nodes.is_empty(), true);
 
                 info!("actual.state: {:?}", actual.state);
-                assert_eq!(actual.state.unwrap(), Status::Joining);
+                assert_eq!(actual.state.unwrap(), Status::Joining); //todo bad
+                // assert_eq!(actual.state.unwrap(), Status::WeaklyUp);
                 info!("actual.state.extent: {:?}", actual.state.extent);
-                assert_eq!(actual.state.extent, Extent::Initialized);
+                assert_eq!(actual.state.extent, Extent::Initialized); //todo bad
+                // assert_eq!(actual.state.extent, Extent::Cluster);
 
                 info!("[{:?}] actual.connected_nodes: {:?}", actual.id ,actual.connected_nodes);
-                assert_eq!(actual.connected_nodes.is_empty(), true);
+                assert_eq!(actual.connected_nodes.len(), 0); //todo bad
+                // assert_eq!(actual.connected_nodes.len(), 1);
 
                 debug_assert!(actual.metrics.is_none(), "no raft metrics");
 
@@ -354,5 +371,6 @@ fn test_network_bind() {
         assert!(sys.run().is_ok(), "error during test");
     }
 
+    info!("ASSERTING MOCK service: {:?}", nb_mock);
     nb_mock.assert();
 }

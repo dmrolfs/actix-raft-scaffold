@@ -7,7 +7,7 @@ use tracing::*;
 use strum_macros::{Display as StrumDisplay};
 use serde::{Serialize, Deserialize};
 use crate::NodeInfo;
-use super::messages::{RegisterNode, ClusterMembershipChange, MembershipAction, NetworkError};
+use super::messages::{ConnectNode, ConnectionAcknowledged, MembershipAction, NetworkError};
 use proximity::*;
 
 mod proximity;
@@ -30,11 +30,17 @@ pub enum NodeError {
     RemoteNodeSendError(String),
     // RemoteNodeSendError(actix_web::client::SendRequestError ),
 
+    #[error("error in http request to remote node:{0}")]
+    RequestError(#[from] reqwest::Error),
+
     #[error("failed to parse response from remote node:{0}")]
     ResponseParseError(#[from] serde_json::Error),
 
     #[error("remote node response failure: {0}")]
     ResponseFailure(String),
+
+    #[error("Node request timed out: {0}")]
+    Timeout(String),
 
     #[error("payload error {0:?}", )]
     PayloadError(String),
@@ -182,8 +188,8 @@ impl Handler<Connect> for Node {
             .map_err(|err, node, _| {
                 warn!("error during connection to remote node#{}:{}", node.id, err);
             })
-            .and_then(|res, node, ctx| {
-                node.handle_connect_result(res, ctx)
+            .and_then(|ack, node, ctx| {
+                node.handle_connect_result(ack, ctx)
             });
 
         ctx.spawn(task);
@@ -201,13 +207,13 @@ impl Handler<Connect> for Node {
 }
 
 impl Node {
-    #[tracing::instrument(skip(self, res, _ctx))]
+    #[tracing::instrument(skip(self, ack, _ctx))]
     fn handle_connect_result(
         &mut self,
-        res: Option<ClusterMembershipChange>,
+        ack: ConnectionAcknowledged,
         _ctx: &mut <Node as Actor>::Context
     ) -> impl ActorFuture<Actor=Self, Item=(), Error=()> {
-        info!("connection made to node#{}: {:?}", self.id, res);
+        info!("connection made to node#{}: {:?}", self.id, ack);
         fut::ok(())
     }
 }
@@ -258,9 +264,9 @@ impl Node {
     fn connect(
         &mut self,
         ctx: &mut Context<Self>
-    ) -> impl ActorFuture<Actor=Self, Item=Option<ClusterMembershipChange>, Error=NodeError> {
+    ) -> impl ActorFuture<Actor=Self, Item=ConnectionAcknowledged, Error=NodeError> {
         if self.status.is_connected() {
-            return fut::ok(None);
+            return fut::ok(ConnectionAcknowledged {});
         } else {
             info!("Connecting Node#{}({:?}) to {}...", self.local_id, self.status, self.proximity);
             let task = self.proximity.connect((self.local_id, &self.local_info), ctx)
@@ -286,10 +292,10 @@ impl Node {
 
                     err
                 })
-                .and_then(|cmc| {
+                .and_then(|ack| {
                     info!("Connection made local#{} to {}", self.local_id, self.proximity);
                     self.status = NodeStatus::WeaklyConnected;
-                    Ok(Some(cmc))
+                    Ok(ack)
                 });
 
             return fut::result(task);
@@ -381,11 +387,11 @@ impl Node {
     }
 }
 
-impl Handler<RegisterNode> for Node {
-    type Result = ResponseActFuture<Self, ClusterMembershipChange, NetworkError>;
+impl Handler<ConnectNode> for Node {
+    type Result = ResponseActFuture<Self, ConnectionAcknowledged, NetworkError>;
 
     #[tracing::instrument(skip(self, ctx))]
-    fn handle(&mut self, msg: RegisterNode, ctx: &mut Self::Context) -> Self::Result {
+    fn handle(&mut self, msg: ConnectNode, ctx: &mut Self::Context) -> Self::Result {
         let change_msg = ChangeClusterConfig::new_to_add(vec![msg.id]);
 
         let task = fut::wrap_future::<_, Self>(ctx.address().send(change_msg))
@@ -395,12 +401,7 @@ impl Handler<RegisterNode> for Node {
                 fut::result(
                     res
                         .map_err(|err| NetworkError::from(err))
-                        .map(|_| {
-                            ClusterMembershipChange {
-                                node_id: Some(msg.id),
-                                action: MembershipAction::Joining,
-                            }
-                        })
+                        .map(|_| ConnectionAcknowledged {} )
                 )
             });
 

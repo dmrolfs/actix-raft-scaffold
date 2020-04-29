@@ -5,8 +5,8 @@ use tracing::*;
 use crate::ports::PortData;
 use super::entities::*;
 use crate::fib::Fibonacci;
-use crate::network::{RegisterNode, GetClusterSummary, };
-use crate::ports::http::entities::{ClusterMembershipChange, MembershipAction};
+use crate::network::{ConnectNode, GetClusterSummary, };
+use crate::ports::http::entities::{ConnectionAcknowledged, MembershipAction};
 
 // NodeInfoMessage > ChangeClusterMembershipResponse
 pub fn join_cluster_route(
@@ -27,7 +27,7 @@ pub fn join_cluster_route(
 
     info!("received register node request for node {:?}:{:?}", nid, body);
 
-    let register_node = RegisterNode {
+    let register_node = ConnectNode {
         id: body.node_id.unwrap().into(),
         info: body.node_info.as_ref().unwrap().clone().into(),
     };
@@ -51,10 +51,7 @@ pub fn join_cluster_route(
                     let answer = res.unwrap().into();
                     let resp = ChangeClusterMembershipResponse {
                         response: Some(change_cluster_membership_response::Response::Result(
-                            ClusterMembershipChange {
-                                node_id: Some(answer),
-                                action: MembershipAction::Added,
-                            }
+                            ConnectionAcknowledged { node_id: Some(answer), }
                         ))
                     };
 

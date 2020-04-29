@@ -350,7 +350,7 @@ pub mod change_cluster_membership_response {
     #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
     #[serde(rename_all = "camelCase")]
     pub enum Response {
-        Result(super::ClusterMembershipChange),
+        Result(super::ConnectionAcknowledged),
         Failure(super::Failure),
         CommandRejectedNotLeader(super::CommandRejectedNotLeader),
     }
@@ -358,26 +358,21 @@ pub mod change_cluster_membership_response {
 
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ClusterMembershipChange {
+pub struct ConnectionAcknowledged {
     pub node_id: ::std::option::Option<NodeId>,
-    pub action: MembershipAction,
 }
 
-impl From<crate::network::messages::ClusterMembershipChange> for ClusterMembershipChange {
-    fn from(that: crate::network::messages::ClusterMembershipChange) -> Self {
-        Self {
-            node_id: that.node_id.map(|id| id.into()),
-            action: that.action.into(),
-        }
-    }
-}
+// impl From<crate::network::messages::ConnectionAcknowledged> for ConnectionAcknowledged {
+//     fn from(that: crate::network::messages::ConnectionAcknowledged) -> Self {
+//         Self {
+//             node_id: that.node_id.map(|id| id.into()),
+//         }
+//     }
+// }
 
-impl Into<crate::network::messages::ClusterMembershipChange> for ClusterMembershipChange {
-    fn into(self) -> crate::network::messages::ClusterMembershipChange {
-        crate::network::messages::ClusterMembershipChange {
-            node_id: self.node_id.map(|id| id.into()),
-            action: self.action.into(),
-        }
+impl Into<crate::network::messages::ConnectionAcknowledged> for ConnectionAcknowledged {
+    fn into(self) -> crate::network::messages::ConnectionAcknowledged {
+        crate::network::messages::ConnectionAcknowledged {}
     }
 }
 

@@ -21,7 +21,7 @@ use node::{Node, NodeRef};
 use summary::ClusterSummary;
 
 pub use messages::NetworkError;
-pub use messages::{RegisterNode, ClusterMembershipChange};
+pub use messages::{ConnectNode, ConnectionAcknowledged};
 
 pub mod state;
 pub mod node;
@@ -551,11 +551,11 @@ impl Network {
                         NetworkError::Unknown("Local leader node is not started".to_string())
                     } else if lref.info.is_some() {
                         NetworkError::NotLeader {
-                            leader_id: lref.id,
-                            leader_address: lref.info.as_ref().unwrap().cluster_address.to_owned(),
+                            leader_id: Some(lref.id),
+                            leader_address: lref.info.clone().map(|info| info.cluster_address.clone()),
                         }
                     } else {
-                        NetworkError::Unknown(format!("Leader#{} info is not registered.", lref.id))
+                        NetworkError::Unknown(format!("Leader#{} actor is not registered.", lref.id))
                     }
                 )
             },
@@ -565,31 +565,26 @@ impl Network {
     }
 }
 
-impl Handler<RegisterNode> for Network {
-    type Result = ResponseActFuture<Self, ClusterMembershipChange, NetworkError>;
+impl Handler<ConnectNode> for Network {
+    type Result = ResponseActFuture<Self, ConnectionAcknowledged, NetworkError>;
 
     #[tracing::instrument(skip(self, _ctx))]
-    fn handle(&mut self, msg: RegisterNode, _ctx: &mut Self::Context) -> Self::Result {
+    fn handle(&mut self, msg: ConnectNode, _ctx: &mut Self::Context) -> Self::Result {
         info!(network_id = self.id, "handling RegisterNode#{} request...", msg.id);
 
-        let joiner_id = msg.id;
-        let joiner_info = msg.info.clone();
-        let delegate = self.leader_delegate();
+        let target_node = msg.clone();
 
-        let task = fut::wrap_future::<_, Self>(futures::future::result(delegate))
-            .and_then(move |del, _, _| {
-                fut::wrap_future::<_, Self>(del.send(msg.clone()))
+        let task = fut::result::<Addr<Node>, NetworkError, Self>(self.leader_delegate())
+            .and_then(move |delegate, _, _| {
+                fut::wrap_future(delegate.send(msg.clone()))
                     .map_err(|err, _, _| NetworkError::from(err))
             })
-            .and_then(move |res, net, ctx| {
-                let res_cmc = res
-                    .and_then(|cmc| {
-                        info!("Node#{:?} registration acknowledged by leader. Continuing to register connection...", cmc.node_id );
-                        net.register_node(joiner_id, &joiner_info, ctx.address())
-                            .map(|_| cmc)
-                    });
-
-                fut::result(res_cmc)
+            .and_then(move |ack, net, ctx| {
+                info!("Node#{:?} connection acknowledged - registering with local network...", target_node.id );
+                fut::result(
+                    net.register_node(target_node.id, &target_node.info, ctx.address())
+                        .and_then(|_| ack)
+                )
             });
 
         Box::new(task)
