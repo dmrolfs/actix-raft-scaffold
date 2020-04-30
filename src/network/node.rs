@@ -7,16 +7,12 @@ use tracing::*;
 use strum_macros::{Display as StrumDisplay};
 use serde::{Serialize, Deserialize};
 use crate::NodeInfo;
-use super::messages::{ConnectNode, ConnectionAcknowledged, MembershipAction, NetworkError};
+use super::Network;
+use super::messages::{ConnectNode, ConnectionAcknowledged, NetworkError};
 use proximity::*;
+use crate::network::HandleNodeStatusChange;
 
 mod proximity;
-
-// #[derive(Debug, PartialEq)]
-// enum Status {
-//     Registered,
-//     Connected,
-// }
 
 #[derive(Error, Debug)]
 pub enum NodeError {
@@ -70,8 +66,8 @@ impl Debug for NodeRef {
     }
 }
 
-#[derive(Debug, StrumDisplay, Clone, Copy, PartialEq)]
-enum NodeStatus {
+#[derive(Debug, StrumDisplay, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum NodeStatus {
     Initialized,
     WeaklyConnected,
     Connected,
@@ -98,6 +94,7 @@ pub struct Node {
     status: NodeStatus,
     local_info: NodeInfo,
     // heartbeat_interval: Option<Duration>,
+    network: Addr<Network>,
 }
 
 impl Node {
@@ -108,6 +105,7 @@ impl Node {
         local_id: NodeId,
         local_info: NodeInfo,
         // heartbeat_interval: Duration,
+        network: Addr<Network>,
     ) -> Self {
         let proximity = Node::determine_proximity(local_id, id, &info);
 
@@ -120,6 +118,7 @@ impl Node {
             status: NodeStatus::Initialized,
             local_info,
             // heartbeat_interval,
+            network,
         }
     }
 
@@ -134,6 +133,38 @@ impl Node {
         } else {
             Box::new(RemoteNode::new(node_id, node_info.clone()))
         }
+    }
+
+    #[tracing::instrument(skip(self))]
+    fn apply_status_change(&mut self, status: NodeStatus ) {
+        info!("changing node#{} to {}", self.id, status);
+        let new_status = match status {
+            NodeStatus::Initialized => {
+                panic!(
+                    format!(
+                        "Node#{} shouldn't go back to {} from {}.",
+                        self.id, status, self.status
+                    )
+                )
+            },
+
+            NodeStatus::Failure(attempts) if 3 < attempts=> {
+                warn!(
+                    "Node#{} failed too many ({}) connections attempts - marking as {}",
+                    self.id, attempts, NodeStatus::Disconnected
+                );
+
+                NodeStatus::Disconnected
+            },
+
+            NodeStatus::Failure(_) => status,
+
+            NodeStatus::WeaklyConnected |
+            NodeStatus::Connected |
+            NodeStatus::Disconnected => { status } ,
+        };
+
+        self.network.do_send( HandleNodeStatusChange { id: self.id, status: new_status, });
     }
 
     // fn handle_change_cluster_config<P>(proximity: &P, to_add: Vec<NodeId>, to_remove: Vec<NodeId>)
@@ -193,16 +224,6 @@ impl Handler<Connect> for Node {
             });
 
         ctx.spawn(task);
-
-        // let task = fut::wrap_future::<_, Self>(self.connect(ctx))
-        //     .and_then(|_, _, _| ());
-        // Box::new(task)
-
-        // self.connect(ctx);
-        // ctx.run_later(self.heartbeat_interval, |node, ctx| {
-        //     node.connect(ctx);
-            // ctx.notify(Connect);
-        // });
     }
 }
 
@@ -214,50 +235,10 @@ impl Node {
         _ctx: &mut <Node as Actor>::Context
     ) -> impl ActorFuture<Actor=Self, Item=(), Error=()> {
         info!("connection made to node#{}: {:?}", self.id, ack);
+        self.apply_status_change(NodeStatus::Connected);
         fut::ok(())
     }
 }
-
-// impl Node {
-//     #[tracing::instrument(skip(self, ctx))]
-//     fn connect(
-//         &mut self,
-//         ctx: &mut Context<Self>
-//     ) -> Box<dyn Future<Item = Option<ClusterMembershipChange>, Error = NodeError>>{
-//         if self.status.is_connected() {
-//             return Box::new(futures::future::ok::<Option<ClusterMembershipChange>, NodeError>(None));
-//         } else {
-//             info!("Connecting Node#{} {}...", self.id, self.proximity);
-//             let task = self.proximity.connect(self.local_id, &self.local_info, ctx)
-//                 .map_err(|err| {
-//                     //todo consider limiting retries
-//                     self.status = match self.status {
-//                         NodeStatus::Failure(attempts) => NodeStatus::Failure(attempts + 1),
-//                         _status => NodeStatus::Failure(1),
-//                     };
-//
-//                     warn!(
-//                         "{:?} in connection attempt local_id#{} => node#{}: {:?}",
-//                         self.status, self.local_id, self.id, err
-//                     );
-//
-//                     ctx.run_later(
-//                         Duration::from_secs(3),
-//                         |_node, ctx| { ctx.notify(Connect); }
-//                     );
-//
-//                     err
-//                 })
-//                 .and_then(|cmc| {
-//                     info!("Connection made local_id#{} to node#{}:{}", self.local_id, self.id, self.proximity);
-//                     self.status = NodeStatus::WeaklyConnected;
-//                     Ok(Some(cmc))
-//                 });
-//
-//             return Box::new(futures::future::result(task));
-//         }
-//     }
-// }
 
 impl Node {
     #[tracing::instrument(skip(self, ctx))]
@@ -272,15 +253,17 @@ impl Node {
             let task = self.proximity.connect((self.local_id, &self.local_info), ctx)
                 .map_err(|err| {
                     //todo consider limiting retries
-                    self.status = match self.status {
+                    let new_status = match self.status {
                         NodeStatus::Failure(attempts) => NodeStatus::Failure(attempts + 1),
                         _status => NodeStatus::Failure(1),
                     };
 
                     warn!(
                         "{:?} in connection attempt local_id#{} => node#{}: {:?}",
-                        self.status, self.local_id, self.id, err
+                        new_status, self.local_id, self.id, err
                     );
+
+                    self.apply_status_change(new_status);
 
                     ctx.run_later(
                         Duration::from_secs(3),
@@ -294,7 +277,8 @@ impl Node {
                 })
                 .and_then(|ack| {
                     info!("Connection made local#{} to {}", self.local_id, self.proximity);
-                    self.status = NodeStatus::WeaklyConnected;
+
+                    self.apply_status_change(NodeStatus::WeaklyConnected);
                     Ok(ack)
                 });
 
@@ -331,16 +315,17 @@ impl Node {
             match res {
                 Ok(_) => {
                     info!("Disconnection of local_id#{} from #{}:{}", self.local_id, self.id, self.proximity);
-                    self.status = NodeStatus::Disconnected;
+                    self.apply_status_change(NodeStatus::Disconnected );
                 }
 
                 Err(err) => {
-                    self.status = match self.status {
+                    warn!("Error in disconnection of local_id#{} from node#{}: {:?}", self.local_id, self.id, err);
+                    let failure = match self.status {
                         NodeStatus::Failure(attempts) => NodeStatus::Failure(attempts + 1),
                         _status => NodeStatus::Failure(1),
                     };
 
-                    warn!("Error in disconnection of local_id#{} from node#{}: {:?}", self.local_id, self.id, err);
+                    self.apply_status_change(failure);
                 }
             }
         }
@@ -406,59 +391,5 @@ impl Handler<ConnectNode> for Node {
             });
 
         Box::new(task)
-
-
-        // let req = ctx.address().send(change_msg)
-        //     .map_err(|err| NetworkError::From(err));
-        //
-        // let task = fut::wrap_future::<_, Self>(req)
-        //     // .map_err()
-        //     // .map_err(|err, _, _| NetworkError::from(err))
-        //     .and_then(move |res, node, ctx| {
-        //         info!(node_id = node.id, "node#{} join submitted to RAFT cluster: {:?}", msg.id, &msg.info);
-        //
-        //         fut::result(
-        //             res
-        //                 .map(|_| {
-        //                     ClusterMembershipChange {
-        //                         node_id: Some(msg.id),
-        //                         action: MembershipAction::Joining,
-        //                     }
-        //                 })
-        //         )
-        //     });
-        //
-        // Box::new(task)
-        //
-
-        // let req = ctx.address().send(change_msg.clone())
-        //     .map_err(|err| NetworkError::from(err))
-        //     .and_then(move |res| {
-        //         info!(node_id = node.id, "node#{} join submitted to RAFT cluster: {:?}", msg.id, &msg.info);
-        //         ClusterMembershipChange {
-        //             node_id: Some(msg.id),
-        //             action: MembershipAction::Joining,
-        //         }
-        //     });
-        //
-        // Box::new(fut::wrap_future::<_, Self>(req))
-        // let task = fut::wrap_future::<_, Self>()
-        //     .map_err(|err, _, _| NetworkError::from(err))
-        //     .and_then(move |res, node, _ctx| {
-        //         info!(node_id = node.id, "node#{} join submitted to RAFT cluster: {:?}", msg.id, &msg.info);
-        //
-        //         fut::result(
-        //             res
-        //                 .map_err(|err| NetworkError::from(err) )
-        //                 .map(|_| {
-        //                     ClusterMembershipChange {
-        //                         node_id: Some(msg.id),
-        //                         action: MembershipAction::Joining,
-        //                     }
-        //                 })
-        //         )
-        //     });
-        //
-        // Box::new(task)
     }
 }

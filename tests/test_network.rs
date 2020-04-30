@@ -3,6 +3,8 @@ mod fixtures;
 use std::net::SocketAddr;
 use actix::spawn;
 use std::collections::BTreeMap;
+use std::time::{Duration, Instant};
+use tokio::timer::Delay;
 use tracing::*;
 use mockito::{mock, server_address, Matcher};
 
@@ -128,14 +130,14 @@ fn test_network_create() {
     assert_eq!(actual.id, utils::generate_node_id(node_info.clone().cluster_address.as_str()));
     assert_eq!(actual.info, node_info);
     assert_eq!(actual.state.unwrap(), Status::Joining);
-    assert_eq!(actual.state.extent, Extent::Initialized);
+    assert_eq!(actual.state.extent(), Extent::SingleNode);
     assert_eq!(
         actual.discovery,
         "127.0.0.1:8888".parse::<SocketAddr>().unwrap()
     );
     assert_eq!(actual.nodes.is_empty(), true);
-    assert_eq!(actual.nodes_connected.is_empty(), true);
-    assert_eq!(actual.isolated_nodes.is_empty(), true);
+    assert_eq!(actual.state.connected_nodes().is_empty(), true);
+    assert_eq!(actual.state.isolated_nodes().is_empty(), true);
     assert_eq!(actual.metrics.is_none(), true);
     assert_eq!(actual.server.is_none(), true);
 }
@@ -158,7 +160,7 @@ fn test_configure_network() {
     assert_eq!(actual.id, utils::generate_node_id(node_info.clone().cluster_address) );
     assert_eq!(actual.info, node_info);
     assert_eq!(actual.state.unwrap(), Status::Joining);
-    assert_eq!(actual.state.extent, Extent::Initialized);
+    assert_eq!(actual.state.extent(), Extent::SingleNode);
     assert_eq!(
         actual.discovery,
         "127.0.0.1:8888".parse::<SocketAddr>().unwrap()
@@ -174,8 +176,8 @@ fn test_configure_network() {
 
     assert_eq!(actual_nodes, expected_nodes);
 
-    assert_eq!(actual.nodes_connected.is_empty(), true);
-    assert_eq!(actual.isolated_nodes.is_empty(), true);
+    assert_eq!(actual.state.connected_nodes().is_empty(), true);
+    assert_eq!(actual.state.isolated_nodes().is_empty(), true);
     assert_eq!(actual.metrics.is_none(), true);
     assert_eq!(actual.server.is_none(), true);
 }
@@ -211,16 +213,16 @@ fn test_network_start() {
             info!("actual.info: {:?}", actual.info);
             assert_eq!(actual.info, node_info);
 
-            info!("actual.isolated_nodes: {:?}", actual.isolated_nodes);
-            assert_eq!(actual.isolated_nodes.is_empty(), true);
+            info!("actual.isolated_nodes: {:?}", actual.state.isolated_nodes());
+            assert_eq!(actual.state.isolated_nodes().is_empty(), true);
 
             info!("actual.state: {:?}", actual.state);
             assert_eq!(actual.state.unwrap(), Status::Joining);
-            info!("actual.state.extent: {:?}", actual.state.extent);
-            assert_eq!(actual.state.extent, Extent::Initialized);
+            info!("actual.state.extent: {:?}", actual.state.extent());
+            assert_eq!(actual.state.extent(), Extent::SingleNode);
 
-            info!("[{:?}] actual.connected_nodes: {:?}", actual.id ,actual.connected_nodes);
-            assert_eq!(actual.connected_nodes.is_empty(), true);
+            info!("[{:?}] actual.connected_nodes: {:?}", actual.id , actual.state.connected_nodes());
+            assert_eq!(actual.state.connected_nodes().is_empty(), true);
 
             debug_assert!(actual.metrics.is_none(), "no raft metrics");
 
@@ -276,23 +278,7 @@ fn test_network_bind() {
         node_b_id,
         r#"},"action":"Added"}}}"#
     );
-    let b_resp_PARSED = serde_json::from_str::<entities::ChangeClusterMembershipResponse>(b_resp.as_str());
-    let b_resp_SLICED = serde_json::from_slice::<entities::ChangeClusterMembershipResponse>( b_resp.as_bytes() );
     info!("mock b resp = |{}|", b_resp);
-
-    let expected = entities::ChangeClusterMembershipResponse {
-        response: Some(entities::change_cluster_membership_response::Response::Result(
-            entities::ConnectionAcknowledged {
-                node_id: Some(entities::NodeId{id: node_b_id}),
-                // action: entities::MembershipAction::Added,
-            }
-        ))
-    };
-    let expected_rep = serde_json::to_string(&expected);
-    assert!(b_resp_PARSED.is_ok());
-    let parsed = b_resp_SLICED.unwrap();
-    info!("json parsing expected body:\n{:?}\n{:?}", expected, parsed);
-    assert_eq!(parsed, expected);
 
     let nb_mock = mock( "POST", Matcher::Regex(b_path_exp))
         .with_header("content-type", "application/json")
@@ -321,6 +307,10 @@ fn test_network_bind() {
                 error!("error in bind: {:?}", err);
                 panic!(err)
             })
+            .and_then( |_| {
+                Delay::new(Instant::now() + Duration::from_secs(1))
+                    .map_err(|err| {panic!(err) })
+            })
             .and_then( move |_| {
                 network2.send(GetClusterSummary)
             })
@@ -338,19 +328,22 @@ fn test_network_bind() {
                 info!("actual.info: {:?}", actual.info);
                 assert_eq!(actual.info, node_a);
 
-                info!("actual.isolated_nodes: {:?}", actual.isolated_nodes);
-                assert_eq!(actual.isolated_nodes.is_empty(), true);
+                info!("actual.isolated_nodes: {:?}", actual.state.isolated_nodes());
+                assert_eq!(actual.state.isolated_nodes().is_empty(), true);
 
+                // Still in Joining since move to WeaklyUp dependent on
+                // RAFT cluster change msg from leader
                 info!("actual.state: {:?}", actual.state);
-                assert_eq!(actual.state.unwrap(), Status::Joining); //todo bad
-                // assert_eq!(actual.state.unwrap(), Status::WeaklyUp);
-                info!("actual.state.extent: {:?}", actual.state.extent);
-                assert_eq!(actual.state.extent, Extent::Initialized); //todo bad
-                // assert_eq!(actual.state.extent, Extent::Cluster);
+                assert_eq!(actual.state.unwrap(), Status::Joining);
 
-                info!("[{:?}] actual.connected_nodes: {:?}", actual.id ,actual.connected_nodes);
-                assert_eq!(actual.connected_nodes.len(), 0); //todo bad
-                // assert_eq!(actual.connected_nodes.len(), 1);
+                info!("actual.connected_nodes: {:?}", actual.state.connected_nodes());
+                info!("actual.state.extent: {:?}", actual.state.extent());
+                // assert_eq!(actual.state.extent, Extent::Initialized); //todo bad
+                assert_eq!(actual.state.extent(), Extent::Cluster);
+
+                info!("[{:?}] actual.connected_nodes: {:?}", actual.id ,actual.state.connected_nodes());
+                // assert_eq!(actual.connected_nodes.len(), 0); //todo bad
+                assert_eq!(actual.state.connected_nodes().len(), 2);
 
                 debug_assert!(actual.metrics.is_none(), "no raft metrics");
 

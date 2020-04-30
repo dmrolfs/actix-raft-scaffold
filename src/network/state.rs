@@ -1,6 +1,9 @@
+use std::collections::HashSet;
 use std::time::Duration;
 use std::fmt::{Debug, Display};
+use actix_raft::NodeId;
 use serde::{Serialize, Deserialize};
+use tracing::*;
 use thiserror::*;
 use chrono::prelude::*;
 use rayon::prelude::*;
@@ -48,7 +51,7 @@ pub enum Status {
 
 #[derive(Debug, StrumDisplay, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum Extent {
-    Initialized,
+    // Initialized,
     SingleNode,
     Cluster,
 }
@@ -56,14 +59,19 @@ pub enum Extent {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct NetworkState {
     pub status: Status,
-    pub extent: Extent,
     log: Vec<StatusEntry>,
+    connected_nodes: HashSet<NodeId>,
+    isolated_nodes: HashSet<NodeId>,
 }
 
 impl NetworkState {
     pub fn unwrap(&self) -> Status { self.status }
 
-    pub fn is_connected(&self) -> bool { self.status == Up }
+    pub fn is_connected(&self) -> bool {
+        self.status == Up ||
+            self.status == WeaklyUp ||
+            (self.status == Joining && !self.connected_nodes.is_empty())
+    }
 
     pub fn into(&mut self, next: Status) -> Status {
         self.check_next_status(next).expect("unexpected status transition");
@@ -103,6 +111,45 @@ impl NetworkState {
 
         ::time::Duration::milliseconds(millis).to_std().unwrap()
     }
+
+    pub fn connected_nodes(&self) -> &HashSet<NodeId> { &self.connected_nodes }
+
+    pub fn isolated_nodes(&self) -> &HashSet<NodeId> { &self.isolated_nodes }
+
+    pub fn extent(&self) -> Extent {
+        debug!("state.is_connected:{} connected_nodes:{:?}", self.is_connected(), self.connected_nodes);
+        if 1 < self.connected_nodes.len() {
+            Extent::Cluster
+        } else {
+            Extent::SingleNode
+        }
+        // if !self.is_connected() || self.connected_nodes.is_empty() {
+        //     Extent::Initialized
+        // } else if self.connected_nodes.len() == 1 {
+        //     Extent::SingleNode
+        // } else {
+        //     Extent::Cluster
+        // }
+    }
+
+    pub fn isolate_node(&mut self, id: NodeId) {
+        if self.isolated_nodes.contains(&id) {
+            debug!("Network node#{} already isolated.", &id);
+        } else {
+            info!("Isolating node#{} for network.", &id);
+            self.isolated_nodes.insert(id);
+            self.connected_nodes.remove(&id);
+        }
+    }
+
+    pub fn restore_node(&mut self, id: NodeId) {
+        if self.isolated_nodes.contains(&id) {
+            info!("Restoring node#{} for network.", &id);
+            self.connected_nodes.insert(id);
+            self.isolated_nodes.remove(&id);
+        }
+    }
+
 }
 
 impl Default for NetworkState {
@@ -110,21 +157,26 @@ impl Default for NetworkState {
         let entry = StatusEntry::new(Joining, Utc::now());
         NetworkState {
             status: entry.status,
-            extent: Extent::Initialized,
             log: vec![entry],
+            connected_nodes: HashSet::default(),
+            isolated_nodes: HashSet::default(),
         }
     }
 }
 
 impl Debug for NetworkState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "StateMachine({}:{}, log:{:?})", self.status, self.extent, self.log)
+        write!(
+            f,
+            "NetworkState({}:{}, connected:{:?}, isolated:{:?}, log:{:?})",
+            self.status, self.extent(), self.connected_nodes(), self.isolated_nodes(), self.log
+        )
     }
 }
 
 impl Display for NetworkState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}:{}", self.status, self.extent)
+        write!(f, "{}:{}", self.status, self.extent())
     }
 }
 

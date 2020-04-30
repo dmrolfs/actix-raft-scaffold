@@ -7,7 +7,6 @@ use super::{Node, NodeError};
 use crate::ports::http::entities::NodeInfoMessage;
 use crate::network::messages;
 use crate::ports::http::entities::{self, change_cluster_membership_response as entities_response};
-use crate::network::node::NodeError::RemoteNotLeaderError;
 
 pub trait ChangeClusterBehavior {
     fn change_cluster_config(
@@ -174,15 +173,17 @@ impl ConnectionBehavior for RemoteNode {
         _ctx: &mut <Node as Actor>::Context
     ) -> Result<messages::ConnectionAcknowledged, NodeError> {
         let register_node_route = format!("{}/nodes/{}", self.scope(), self.remote_id);
-        debug!("connect Node#{} to RemoteNode#{} via {}", local_id_info.0, self.remote_id, register_node_route);
+        debug!(
+            "connect Node#{} to RemoteNode#{} via {}",
+            local_id_info.0, self.remote_id, register_node_route
+        );
 
         let body = NodeInfoMessage {
             node_id: Some(local_id_info.0.into()),
             node_info: Some(local_id_info.1.clone().into()),
         };
 
-        let self_rep = self.to_string();
-        let result = self.client
+        self.client
             // .get("https://my-json-server.typicode.com/dmrolfs/json-test-server/connection")
             .post(&register_node_route)
             .json(&body)
@@ -191,9 +192,7 @@ impl ConnectionBehavior for RemoteNode {
             .json::<entities::ChangeClusterMembershipResponse>()
             .map_err(|err| self.convert_error(err))
             .and_then(|cresp| {
-                debug!("SUCCESS connect_to_{} PARSED response: |{:?}|", self_rep, cresp);
-
-                let ack = if let Some(response) = cresp.response {
+                if let Some(response) = cresp.response {
                     match response {
                         entities_response::Response::Result(r) => {
                             let ack: messages::ConnectionAcknowledged = r.into();
@@ -212,154 +211,13 @@ impl ConnectionBehavior for RemoteNode {
                         }
                     }
                 } else {
-                    Err(NodeError::Unknown("good ChangeClusterResponse had empty response".to_string()))
-                };
-
-                ack
-            })?;
-
-        Ok(result)
+                    Err(NodeError::Unknown(
+                        "good ChangeClusterResponse had empty response".to_string()
+                    ))
+                }
+            })
     }
 
-    // #[tracing::instrument(skip(self, _ctx))]
-    // fn connect(
-    //     &mut self,
-    //     local_id: NodeId,
-    //     local_info: &NodeInfo,
-    //     ctx: &mut <Node as Actor>::Context
-    // ) -> Result<messages::ClusterMembershipChange, NodeError> {
-    //     let register_node_route = format!("http://{}/api/cluster/nodes/{}", local_info.cluster_address, local_id);
-    //     let body = NodeInfoMessage {
-    //         node_id: Some(local_id.into()),
-    //         node_info: Some(local_info.clone().into()),
-    //     };
-    //
-    //
-    //     let task = self.client.post(register_node_route)
-    //         .timeout(std::time::Duration::from_secs(10))
-    //         .send_json(&body)
-    //         .map_err(|err| NodeError::RemoteNodeSendError(err.to_string()))
-    //         .and_then(|resp| {
-    //             resp.body()
-    //                 .map_err(|err| NodeError::PayloadError(err.to_string()))
-    //                 .and_then(|body| {
-    //                     let change_resp = serde_json::from_slice::<entities::ChangeClusterMembershipResponse>(&body)
-    //                         .map_err(|err| NodeError::Unknown(err.to_string())) // NodeError::from(err))
-    //                         .and_then(|cresp| {
-    //                             if let Some(response) = cresp.response {
-    //                                 match response {
-    //                                     entities_response::Response::Result(cmc) => Ok(cmc.into()),
-    //
-    //                                     entities_response::Response::Failure(f) => {
-    //                                         Err(NodeError::ResponseFailure(f.description))
-    //                                     }
-    //
-    //                                     entities_response::Response::CommandRejectedNotLeader(leader) => {
-    //                                         Err(NodeError::RemoteNotLeaderError {
-    //                                             leader_id: Some(leader.leader_id.into()),
-    //                                             leader_address: Some(leader.leader_address.to_owned()),
-    //                                         })
-    //                                     }
-    //                                 }
-    //                             } else {
-    //                                 Err(NodeError::Unknown("good ChangeClusterResponse had empty response".to_string()))
-    //                             }
-    //                         });
-    //
-    //                     change_resp
-    //
-    //                 })
-    //         }).
-    //
-    //     Box::new(task)
-    //
-    //
-    //
-    //
-    //     // let task = fut::wrap_future::<_, Node>(
-    //     //     self.client.post(register_node_route)
-    //     //         .header("Content-Type", "application/json")
-    //     //         .send_json(&body)
-    //     // )
-    //     //     .map_err(|err, _, _| NodeError::from(err))
-    //     //     .and_then(|res, _, _| {
-    //     //         let mut res = res;
-    //     //         fut::wrap_future::<_, Node>(res.json())
-    //     //             .map_err(|err| NodeError::from(err))
-    //     //             .and_then(|json, _, _| {
-    //     //                 let change_resp = serde_json::from_slice::<ChangeClusterMembershipResponse>(json)
-    //     //                     .map_err(|err| NodeError::from(err))
-    //     //                     .and_then(|cresp| {
-    //     //                         if let Some(response) = cresp.response {
-    //     //                             match response {
-    //     //                                 ChangeResponse::Result(cmc) => Ok(cmc),
-    //     //
-    //     //                                 ChangeResponse::Failure(f) => {
-    //     //                                     Err(NodeError::ResponseFailure(f.description))
-    //     //                                 }
-    //     //
-    //     //                                 ChangeResponse::CommandRejectedNotLeader(leader) => {
-    //     //                                     Err(NodeError::RemoteNotLeaderError {
-    //     //                                         leader_id: Some(leader.leader_id.into()),
-    //     //                                         leader_address: Some(leader.leader_address.to_owned()),
-    //     //                                     })
-    //     //                                 }
-    //     //                             }
-    //     //                         } else {
-    //     //                             Err(NodeError::Unknown("good ChangeClusterResponse had empty response".to_string()))
-    //     //                         }
-    //     //                     });
-    //     //
-    //     //                 change_resp
-    //     //             })
-    //     //     });
-    //     //
-    //     // Box::new(task)
-    //
-    //
-    //     // let task = self.client.post(register_node_route)
-    //     //     .header("Content-Type", "application/json")
-    //     //     .send_json(&body)
-    //     //     .map_err(|err| NodeError::from(err))
-    //     //     .and_then(|res| {
-    //     //         let mut res = res;
-    //     //
-    //     //         let foo = fut::wrap_future::<_, Self>(res.body());
-    //     //
-    //     //         .then(move |resp, _, _| {
-    //     //             if let Ok(body) = resp {
-    //     //                 let change_resp = serde_json::from_slice::<ChangeClusterMembershipResponse>(body.as_ref())
-    //     //                     .map_err(|err| NodeError::from(err))
-    //     //                     .and_then(|cresp| {
-    //     //                         if let Some(response) = cresp.response {
-    //     //                           match response {
-    //     //                               ChangeResponse::Result(cmc) => Ok(cmc),
-    //     //
-    //     //                               ChangeResponse::Failure(f) => {
-    //     //                                   Err(NodeError::ResponseFailure(f.description))
-    //     //                               }
-    //     //
-    //     //                               ChangeResponse::CommandRejectedNotLeader(leader) => {
-    //     //                                   Err(NodeError::RemoteNotLeaderError {
-    //     //                                       leader_id: Some(leader.leader_id.into()),
-    //     //                                       leader_address: Some(leader.leader_address.to_owned()),
-    //     //                                   })
-    //     //                               }
-    //     //                           }
-    //     //                         } else {
-    //     //                             Err(NodeError::Unknown("good ChangeClusterResponse had empty response".to_string()))
-    //     //                         }
-    //     //                     });
-    //     //
-    //     //                 change_resp
-    //     //             } else {
-    //     //                 fut::result(resp.map_err(|err| NodeError::from(err)))
-    //     //             }
-    //     //         })
-    //     //     });
-    //     //
-    //     // Box::new(task)
-    // }
 
     #[tracing::instrument(skip(self, _ctx))]
     fn disconnect(&mut self, _ctx: &mut <Node as Actor>::Context) -> Result<(), NodeError> {

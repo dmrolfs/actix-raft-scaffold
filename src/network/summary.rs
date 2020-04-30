@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::fmt::Debug;
 use actix_raft::{NodeId, messages::MembershipConfig};
 use serde::{Serialize, Deserialize};
@@ -12,24 +11,8 @@ pub struct ClusterSummary {
     pub id: NodeId,
     pub state: NetworkState,
     pub info: NodeInfo,
-    pub connected_nodes: HashSet<NodeId>,
-    pub isolated_nodes: HashSet<NodeId>,
     pub metrics: Option<Metrics>,
 }
-
-
-// impl From<Network> for ClusterSummary {
-//     fn from(n: Network) -> Self {
-//         Self {
-//             id: n.id,
-//             state: n.state.clone(),
-//             info: n.info.clone(),
-//             connected_nodes: n.nodes_connected.clone(),
-//             isolated_nodes: n.isolated_nodes.clone(),
-//             metrics: n.metrics.into(),
-//         }
-//     }
-// }
 
 
 /// All possible states of a Raft node.
@@ -92,28 +75,3 @@ impl From<actix_raft::RaftMetrics> for Metrics {
         }
     }
 }
-
-
-// impl Serialize for RaftMetrics {
-//     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-//         where
-//             S: Serializer,
-//     {
-//         // 3 is the number of fields in the struct.
-//         let mut state = serializer.serialize_struct("RaftMetrics", 6)?;
-//         state.serialize_field("id", &self.id)?;
-//         let state_rep = match self.state {
-//             actix_raft::metrics::State::NonVoter => "NonVoter",
-//             actix_raft::metrics::State::Follower => "Follower",
-//             actix_raft::metrics::State::Candidate => "Candidate",
-//             actix_raft::metrics::State::Leader => "Leader",
-//         };
-//         state.serialize_field("state", state_rep)?;
-//         state.serialize_field("current_term", &self.current_term)?;
-//         state.serialize_field("last_log_index", &self.last_log_index)?;
-//         state.serialize_field("last_applied", &self.last_applied)?;
-//         state.serialize_field("current_leader", &self.current_leader)?;
-//         state.end()
-//     }
-// }
-

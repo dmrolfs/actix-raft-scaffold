@@ -6,7 +6,7 @@ use crate::ports::PortData;
 use super::entities::*;
 use crate::fib::Fibonacci;
 use crate::network::{ConnectNode, GetClusterSummary, };
-use crate::ports::http::entities::{ConnectionAcknowledged, MembershipAction};
+use crate::ports::http::entities::{ConnectionAcknowledged};
 
 // NodeInfoMessage > ChangeClusterMembershipResponse
 pub fn join_cluster_route(

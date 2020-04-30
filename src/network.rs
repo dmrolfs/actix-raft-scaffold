@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::time::{Instant, Duration};
 use actix::prelude::*;
@@ -17,11 +17,14 @@ use crate::{
     utils,
 };
 use state::*;
-use node::{Node, NodeRef};
+use node::{Node, NodeRef, NodeStatus};
 use summary::ClusterSummary;
 
 pub use messages::NetworkError;
-pub use messages::{ConnectNode, ConnectionAcknowledged};
+pub use messages::{
+    HandleNodeStatusChange,
+    ConnectNode, ConnectionAcknowledged
+};
 
 pub mod state;
 pub mod node;
@@ -52,8 +55,8 @@ pub struct Network {
     pub state: NetworkState,
     pub discovery: SocketAddr,
     pub nodes: BTreeMap<NodeId, NodeRef>,
-    pub nodes_connected: HashSet<NodeId>,
-    pub isolated_nodes: HashSet<NodeId>,
+    // pub connected_nodes: HashSet<NodeId>,
+    // pub isolated_nodes: HashSet<NodeId>,
     pub ring: RingType,
     pub metrics: Option<RaftMetrics>,
     pub server: Option<Server>,
@@ -64,11 +67,11 @@ impl std::fmt::Debug for Network {
         write!(
             f,
             // "Network(id:{:?}, state:{:?}, net_type:{:?}, info:{:?}, nodes:{:?}, isolated_nodes:{:?}, metrics:{:?})",
-            "Network(id:{:?}, state:{:?}, nodes:{:?}, isolated_nodes:{:?}, discovery:{:?}, metrics:{:?})",
+            "Network(id:{:?}, state:{:?}, discovery:{:?}, metrics:{:?})",
             self.id,
             self.state,
-            self.nodes_connected,
-            self.isolated_nodes,
+            // self.connected_nodes,
+            // self.isolated_nodes,
             self.discovery,
             self.metrics,
         )
@@ -94,8 +97,8 @@ impl Network {
             state: NetworkState::default(),
             discovery,
             nodes: BTreeMap::new(),
-            nodes_connected: HashSet::new(),
-            isolated_nodes: HashSet::new(),
+            // connected_nodes: HashSet::new(),
+            // isolated_nodes: HashSet::new(),
             ring,
             metrics: None,
             server: None,
@@ -107,8 +110,6 @@ impl Network {
             id: self.id,
             state: self.state.clone(),
             info: self.info.clone(),
-            connected_nodes: self.nodes_connected.clone(),
-            isolated_nodes: self.isolated_nodes.clone(),
             metrics: self.metrics.clone().map(|m| m.into()),
         }
     }
@@ -154,12 +155,12 @@ impl Network {
     }
 
 
-    #[tracing::instrument(skip(self, _self_addr))]
+    #[tracing::instrument(skip(self, self_addr))]
     fn register_node(
         &mut self,
         node_id: NodeId,
         node_info: &NodeInfo,
-        _self_addr: Addr<Self>
+        self_addr: Addr<Self>
     ) -> Result<(), NetworkError> {
         if !self.nodes.contains_key(&node_id) {
             let node_ref = NodeRef {
@@ -168,21 +169,13 @@ impl Network {
                 addr: None,
             };
             self.nodes.insert(node_id, node_ref);
-
-            // match self.nodes.get_mut(&node_id) {
-            //     Some(nref) => nref,
-            //     None => {
-            //         let err_msg = format!("No node#{} registered in Network#{}.", node_id, self.id);
-            //         return Err(NetworkError::Unknown(err_msg))
-            //     },
-            // }
         }
         let node_ref = self.nodes.get(&node_id)
             .expect(format!("NodeRef assigned for {}", node_id).as_str());
 
         debug!(network_id = self.id, "Registering node {:?}...", &node_ref);
 
-        let result = match self.nodes.get_mut(&node_id) {
+        match self.nodes.get_mut(&node_id) {
             Some(node_ref) => {
                 node_ref.info = Some(node_info.clone());
                 if node_ref.addr.is_none() {
@@ -193,6 +186,7 @@ impl Network {
                         node_info.clone(),
                         self.id,
                         self.info.clone(),
+                        self_addr,
                     );
 
                     node_ref.addr = Some(node.start());
@@ -205,52 +199,20 @@ impl Network {
                 let err_msg = format!("No node#{} registered in Network#{}.", node_id, self.id);
                 Err(NetworkError::Unknown(err_msg))
             }
-        };
-
-        result
+        }
             .and_then(|res| {
                 self.restore_node(node_id);
                 Ok(res)
             })
-
-        // if let Some(ref_info) = node_ref.info {
-        //     if node_ref.addr.is_none() {
-        //         info!(network_id = self.id, "Starting node#{}...", node_ref.id);
-        //
-        //         let node = Node::new(
-        //             node_ref.id,
-        //             self.id,
-        //             ref_info.cluster_address.as_str(),
-        //             self.info.clone(),
-        //         );
-        //
-        //         node_ref.addr = Some(node.start());
-        //     }
-        //
-        //     self.restore_node(node_id);
-        // }
-        //
-        // Ok(node_ref.clone())
     }
 
     /// Isolate the network of the specified node.
-    fn isolate_node(&mut self, id: NodeId) {
-        if self.isolated_nodes.contains(&id) {
-            info!("Network node already isolated {}.", &id);
-        } else {
-            info!("Isolating network for node {}.", &id);
-            self.isolated_nodes.insert(id);
-        }
-    }
+    #[tracing::instrument(skip(self))]
+    fn isolate_node(&mut self, id: NodeId) { self.state.isolate_node(id); }
 
     /// Restore the network of the specified node.
     #[tracing::instrument(skip(self))]
-    fn restore_node(&mut self, id: NodeId) {
-        if self.isolated_nodes.contains(&id) {
-            info!("Restoring network for node #{}", &id);
-            self.isolated_nodes.remove(&id);
-        }
-    }
+    fn restore_node(&mut self, id: NodeId) { self.state.restore_node(id); }
 }
 
 impl Actor for Network {
@@ -486,60 +448,6 @@ impl Handler<GetClusterSummary> for Network {
 //     }
 // }
 
-// impl Handler<RegisterNode> for Network {
-//     type Result = ResponseActFuture<Self, ClusterMembershipChange, NetworkError>;
-//
-//     #[tracing::instrument(skip(self, _ctx))]
-//     fn handle(&mut self, msg: RegisterNode, _ctx: &mut Self::Context) -> Self::Result {
-//         info!(network_id = self.id, "handling Join request...");
-//
-//         let joiner_id = msg.id;
-//         let joiner_info = msg.info.clone();
-//
-//         let delegate = match self.leader_ref() {
-//             Some(NodeRef{id, info: _, addr}) if *id == self.id && addr.is_some() => Ok(addr.clone().unwrap()),
-//
-//             Some(nref) => {
-//                 let err = if nref.id == self.id {
-//                     NetworkError::Unknown("Local leader node not started".to_string())
-//                 } else if nref.info.is_some() {
-//                     let leader_address = nref.info.as_ref().unwrap().cluster_address.to_owned();
-//                     NetworkError::NotLeader {
-//                         leader_id: nref.id,
-//                         leader_address,
-//                     }
-//                 } else {
-//                     NetworkError::Unknown(format!("Leader#{} info is not registered.", nref.id))
-//                 };
-//
-//                 Err(err)
-//             }
-//
-//             None => Err(NetworkError::NoElectedLeader),
-//         };
-//
-//         let task = fut::wrap_future::<_, Self>( futures::future::result(delegate))
-//             .and_then(move |delegate, _, _| {
-//                 fut::wrap_future::<_, Self>(delegate.send(msg.clone()))
-//                     .map_err(|err, _, _| NetworkError::from(err) )
-//             })
-//             .and_then(move |res, net, ctx| {
-//                 net.register_node(joiner_id, &joiner_info, ctx.address());
-//                 fut::result(res)
-//             });
-//
-//         Box::new(task )
-//
-//         // let _change = ChangeClusterConfig { to_add: vec![msg.id], to_remove: vec![], };
-//
-//         //todo: find leader node
-//         //todo: determine network state based on # nodes connected (0=>initialize, 1=>SingleNode, +=>Clustered)
-//         //todo: send Join to leader node
-// //todo: leader's local_node interprets Join into ChangeClusterConfig command;
-//         //todo: and_then register_node( msg.id, msg.info, ctx.address() )
-//     }
-// }
-
 impl Network {
     fn leader_delegate(&self) -> Result<Addr<Node>, NetworkError> {
         match self.leader_ref() {
@@ -561,6 +469,31 @@ impl Network {
             },
 
             None => Err(NetworkError::NoElectedLeader),
+        }
+    }
+}
+
+impl Handler<HandleNodeStatusChange> for Network {
+    type Result = ();
+
+    #[tracing::instrument(skip(self, _ctx))]
+    fn handle(&mut self, msg: HandleNodeStatusChange, _ctx: &mut Self::Context) -> Self::Result {
+        info!("Node#{} status changed to: {}", msg.id, msg.status);
+        if self.nodes.contains_key(&msg.id) {
+            match msg.status {
+                NodeStatus::Initialized => { self.isolate_node(msg.id); },
+                NodeStatus::WeaklyConnected => { self.isolate_node(msg.id); },
+                NodeStatus::Connected => { self.restore_node(msg.id); },
+                NodeStatus::Failure(attempts) => {
+                    info!("Node#{} having trouble connecting with {} attempts", msg.id, attempts);
+                },
+                NodeStatus::Disconnected => {
+                    info!("This network cannot reach Node#{} - isolating.", msg.id);
+                    self.isolate_node(msg.id);
+                },
+            };
+
+
         }
     }
 }
@@ -590,16 +523,23 @@ impl Handler<ConnectNode> for Network {
         Box::new(task)
     }
 }
+//         //todo: find leader node
+//         //todo: determine network state based on # nodes connected (0=>initialize, 1=>SingleNode, +=>Clustered)
+//         //todo: send Join to leader node
+// //todo: leader's local_node interprets Join into ChangeClusterConfig command;
+//         //todo: and_then register_node( msg.id, msg.info, ctx.address() )
+//     }
+// }
 
 
-#[derive(Message, Debug)]
-pub struct Handshake(pub NodeId, pub NodeInfo);
-
-impl Handler<Handshake> for Network {
-    type Result = ();
-
-    #[tracing::instrument(skip(self, _ctx))]
-    fn handle(&mut self, msg: Handshake, _ctx: &mut Self::Context) -> Self::Result {
-        self.restore_node(msg.0);
-    }
-}
+// #[derive(Message, Debug)]
+// pub struct Handshake(pub NodeId, pub NodeInfo);
+//
+// impl Handler<Handshake> for Network {
+//     type Result = ();
+//
+//     #[tracing::instrument(skip(self, _ctx))]
+//     fn handle(&mut self, msg: Handshake, _ctx: &mut Self::Context) -> Self::Result {
+//         self.restore_node(msg.0);
+//     }
+// }

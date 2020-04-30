@@ -5,6 +5,7 @@ use serde::{Serialize, Deserialize};
 use strum_macros::{Display as StrumDisplay};
 use thiserror::Error;
 use tracing::*;
+use super::node::NodeStatus;
 use crate::{
     NodeInfo,
     ports,
@@ -38,7 +39,11 @@ pub enum NetworkError {
     Unknown(String),
 }
 
-
+#[derive(Message, Debug, Clone, Serialize, Deserialize)]
+pub struct HandleNodeStatusChange {
+    pub id: NodeId,
+    pub status: NodeStatus,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConnectNode {
