@@ -409,67 +409,30 @@ impl Handler<GetClusterSummary> for Network {
     }
 }
 
-// impl Network {
-//     #[tracing::instrument(skip(self, _ctx))]
-//     fn leader_delegate<M, A, R, E>(&self, msg: M, _ctx: &mut <Network as Actor>::Context) -> ResponseActFuture<A, R, E>
-//     where
-//         M: Message + std::fmt::Debug + Send,
-//         M::Result: Send,
-//         A: Actor,
-//     {
-//         let leader_ref = self.leader_ref();
-//         info!(network_id = self.id, "delegating to leader#{:?}", leader_ref.map(|r| r.id));
-//
-//         let task = match leader_ref {
-//             Some(NodeRef{id, info, addr}) if *id == self.id && addr.is_some() => {
-//                 fut::wrap_future::<_, Self>(addr.unwrap().send(msg))
-//                     .map_err(|err, _, _| NetworkError::from(err))
-//             }
-//
-//             Some(nref) => {
-//                 fut::err(
-//                     if nref.id == self.id {
-//                         NetworkError::Unknown("Local leader node not started".to_string())
-//                     } else if nref.info.is_some() {
-//                         NetworkError::NotLeader {
-//                             leader_id: nref.id,
-//                             leader_address: nref.info.unwrap().cluster_address.to_owned(),
-//                         }
-//                     } else {
-//                         NetworkError::Unknown(format!("Leader#{} info is not registered.", nref.id))
-//                     }
-//                 )
-//             }
-//
-//             None => fut::err(NetworkError::NoElectedLeader),
-//         };
-//
-//         Box::new( task )
-//     }
-// }
-
 impl Network {
-    fn leader_delegate(&self) -> Result<Addr<Node>, NetworkError> {
-        match self.leader_ref() {
-            Some(NodeRef{ id, info: _, addr}) if id == &self.id && addr.is_some() => Ok(addr.clone().unwrap()),
+    fn leader_delegate(&self) -> impl ActorFuture<Actor = Self, Item = Addr<Node>, Error = NetworkError> {
+        fut::result(
+            match self.leader_ref() {
+                Some(NodeRef{ id, info: _, addr}) if id == &self.id && addr.is_some() => Ok(addr.clone().unwrap()),
 
-            Some(lref) => {
-                Err(
-                    if self.id == lref.id {
-                        NetworkError::Unknown("Local leader node is not started".to_string())
-                    } else if lref.info.is_some() {
-                        NetworkError::NotLeader {
-                            leader_id: Some(lref.id),
-                            leader_address: lref.info.clone().map(|info| info.cluster_address.clone()),
+                Some(lref) => {
+                    Err(
+                        if self.id == lref.id {
+                            NetworkError::Unknown("Local leader node is not started".to_string())
+                        } else if lref.info.is_some() {
+                            NetworkError::NotLeader {
+                                leader_id: Some(lref.id),
+                                leader_address: lref.info.clone().map(|info| info.cluster_address.clone()),
+                            }
+                        } else {
+                            NetworkError::Unknown(format!("Leader#{} actor is not registered.", lref.id))
                         }
-                    } else {
-                        NetworkError::Unknown(format!("Leader#{} actor is not registered.", lref.id))
-                    }
-                )
-            },
+                    )
+                },
 
-            None => Err(NetworkError::NoElectedLeader),
-        }
+                None => Err(NetworkError::NoElectedLeader),
+            }
+        )
     }
 }
 
@@ -507,7 +470,8 @@ impl Handler<ConnectNode> for Network {
 
         let target_node = msg.clone();
 
-        let task = fut::result::<Addr<Node>, NetworkError, Self>(self.leader_delegate())
+        Box::new(
+        self.leader_delegate()
             .and_then(move |delegate, _, _| {
                 fut::wrap_future(delegate.send(msg.clone()))
                     .map_err(|err, _, _| NetworkError::from(err))
@@ -518,9 +482,8 @@ impl Handler<ConnectNode> for Network {
                     net.register_node(target_node.id, &target_node.info, ctx.address())
                         .and_then(|_| ack)
                 )
-            });
-
-        Box::new(task)
+            })
+        )
     }
 }
 //         //todo: find leader node
@@ -528,18 +491,5 @@ impl Handler<ConnectNode> for Network {
 //         //todo: send Join to leader node
 // //todo: leader's local_node interprets Join into ChangeClusterConfig command;
 //         //todo: and_then register_node( msg.id, msg.info, ctx.address() )
-//     }
-// }
-
-
-// #[derive(Message, Debug)]
-// pub struct Handshake(pub NodeId, pub NodeInfo);
-//
-// impl Handler<Handshake> for Network {
-//     type Result = ();
-//
-//     #[tracing::instrument(skip(self, _ctx))]
-//     fn handle(&mut self, msg: Handshake, _ctx: &mut Self::Context) -> Self::Result {
-//         self.restore_node(msg.0);
 //     }
 // }
