@@ -33,9 +33,15 @@ pub mod summary;
 
 
 // impl Network {
-//     fn self_send_after_delay<M>(&mut self, msg: M, delay: Duration, ctx: &mut Self::Context) -> actix::MessageResponse<Self, M>
+//     fn self_send_after_delay<M, I>(
+//         &mut self,
+//         msg: M,
+//         delay: Duration,
+//         ctx: &mut Context<Self>
+//     ) -> impl ActorFuture<Actor = Self, Item = M::Result::Item, Error = E>
 //     where
 //         M: Message,
+//         M::Result = I,
 //     {
 //         Box::new(
 //             fut::wrap_future::<_, Self>( Delay::new(Instant::now() + delay))
@@ -55,8 +61,6 @@ pub struct Network {
     pub state: NetworkState,
     pub discovery: SocketAddr,
     pub nodes: BTreeMap<NodeId, NodeRef>,
-    // pub connected_nodes: HashSet<NodeId>,
-    // pub isolated_nodes: HashSet<NodeId>,
     pub ring: RingType,
     pub metrics: Option<RaftMetrics>,
     pub server: Option<Server>,
@@ -70,8 +74,6 @@ impl std::fmt::Debug for Network {
             "Network(id:{:?}, state:{:?}, discovery:{:?}, metrics:{:?})",
             self.id,
             self.state,
-            // self.connected_nodes,
-            // self.isolated_nodes,
             self.discovery,
             self.metrics,
         )
@@ -97,8 +99,6 @@ impl Network {
             state: NetworkState::default(),
             discovery,
             nodes: BTreeMap::new(),
-            // connected_nodes: HashSet::new(),
-            // isolated_nodes: HashSet::new(),
             ring,
             metrics: None,
             server: None,
@@ -410,6 +410,8 @@ impl Handler<GetClusterSummary> for Network {
 }
 
 impl Network {
+    /// Returns the Addr<Node> if this network is the leader; otherwise if there is consensus, a
+    /// NotLeader error referencing the leader or notice there is no elected leader.
     fn leader_delegate(&self) -> impl ActorFuture<Actor = Self, Item = Addr<Node>, Error = NetworkError> {
         fut::result(
             match self.leader_ref() {
@@ -461,28 +463,85 @@ impl Handler<HandleNodeStatusChange> for Network {
     }
 }
 
+impl Network {
+    fn node_for_id(&self, id: NodeId) -> Option<Addr<Node>> {
+        self.nodes.get(&id).map(|node_ref| node_ref.addr.clone()).flatten()
+    }
+
+    #[tracing::instrument(skip(self, ctx))]
+    fn handle_connect_to_remote_node(
+        &mut self,
+        command: ConnectNode,
+        ctx: &mut Context<Self>
+    ) -> impl ActorFuture<Actor = Self, Item = (), Error = NetworkError> {
+        fut::result(
+        match self.node_for_id(command.id) {
+                Some(node) => {
+                    debug!("Node#{} exists - completing connection", command.id);
+                    node.do_send(command.clone());
+                    Ok(())
+                },
+
+                None => {
+                    debug!("Node#{} does not exist - registering", command.id);
+                    self.register_node(command.id, &command.info, ctx.address())
+                },
+            }
+        )
+    }
+
+    #[tracing::instrument(skip(self, _ctx))]
+    fn delegate_to_leader<M, I, E>(
+        &self,
+        command: M,
+        _ctx: &mut Context<Self>,
+    ) -> impl ActorFuture<Actor = Self, Item = I, Error = E>
+    where
+        M: Message + std::fmt::Debug + Send + 'static,
+        M::Result: Into<Result<I, E>>,
+        M::Result: Send,
+        Node: Handler<M>,
+        E: From<actix::MailboxError>,
+        E: From<NetworkError>,
+    {
+        debug!(network_id = self.id, "delegating command to leader:{:?}", command);
+
+        Box::new(
+            self.leader_delegate()
+                .map_err(|err, _, _| err.into())
+                .and_then( move |leader, _, _| {
+                    fut::wrap_future::<_, Self>(leader.send(command))
+                        .map_err(|err, _, _| err.into())
+                        .and_then(|res, _, _| fut::result(res.into()))
+                })
+        )
+    }
+}
+
 impl Handler<ConnectNode> for Network {
     type Result = ResponseActFuture<Self, ConnectionAcknowledged, NetworkError>;
 
-    #[tracing::instrument(skip(self, _ctx))]
-    fn handle(&mut self, msg: ConnectNode, _ctx: &mut Self::Context) -> Self::Result {
-        info!(network_id = self.id, "handling RegisterNode#{} request...", msg.id);
-
-        let target_node = msg.clone();
+    #[tracing::instrument(skip(self, ctx))]
+    fn handle(&mut self, command: ConnectNode, ctx: &mut Self::Context) -> Self::Result {
+        info!(network_id = self.id, "handling ConnectNode#{} command...", command.id);
 
         Box::new(
-        self.leader_delegate()
-            .and_then(move |delegate, _, _| {
-                fut::wrap_future(delegate.send(msg.clone()))
-                    .map_err(|err, _, _| NetworkError::from(err))
-            })
-            .and_then(move |ack, net, ctx| {
-                info!("Node#{:?} connection acknowledged - registering with local network...", target_node.id );
-                fut::result(
-                    net.register_node(target_node.id, &target_node.info, ctx.address())
-                        .and_then(|_| ack)
-                )
-            })
+            self.handle_connect_to_remote_node(command.clone(), ctx)
+                .and_then(move |_, network, ctx| {
+                    network.delegate_to_leader(command.clone(), ctx)
+                        .then(move |res,_ ,_| {
+                            fut::result(
+                                match res {
+                                    Ok(_) => res,
+                                    Err(NetworkError::NoElectedLeader) => Ok(ConnectionAcknowledged {}),
+                                    Err(NetworkError::NotLeader{leader_id: _, leader_address: _}) => {
+                                        Ok(ConnectionAcknowledged {})
+                                    },
+                                    Err(_) => res,
+                                }
+                            )
+                        })
+                })
         )
     }
 }
@@ -491,5 +550,32 @@ impl Handler<ConnectNode> for Network {
 //         //todo: send Join to leader node
 // //todo: leader's local_node interprets Join into ChangeClusterConfig command;
 //         //todo: and_then register_node( msg.id, msg.info, ctx.address() )
+//     }
+// }
+
+
+// impl Handler<ConnectNode> for Network {
+//     type Result = ResponseActFuture<Self, ConnectionAcknowledged, NetworkError>;
+//
+//     #[tracing::instrument(skip(self, _ctx))]
+//     fn handle(&mut self, msg: ConnectNode, _ctx: &mut Self::Context) -> Self::Result {
+//         info!(network_id = self.id, "handling RegisterNode#{} request...", msg.id);
+//
+//         let target_node = msg.clone();
+//
+//         Box::new(
+//         self.leader_delegate()
+//             .and_then(move |delegate, _, _| {
+//                 fut::wrap_future(delegate.send(msg.clone()))
+//                     .map_err(|err, _, _| NetworkError::from(err))
+//             })
+//             .and_then(move |ack, net, ctx| {
+//                 info!("Node#{:?} connection acknowledged - registering with local network...", target_node.id );
+//                 fut::result(
+//                     net.register_node(target_node.id, &target_node.info, ctx.address())
+//                         .and_then(|_| ack)
+//                 )
+//             })
+//         )
 //     }
 // }

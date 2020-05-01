@@ -367,3 +367,8 @@ fn test_network_bind() {
     info!("ASSERTING MOCK service: {:?}", nb_mock);
     nb_mock.assert();
 }
+
+#[test]
+fn test_handle_cmd_connect_node() {
+    unimplemented!()
+}
