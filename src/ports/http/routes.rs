@@ -3,14 +3,20 @@ use futures::{Future, future};
 use actix_web::{web, Error, HttpRequest, HttpResponse};
 use tracing::*;
 use crate::ports::PortData;
-use super::entities::*;
+use super::entities;
 use crate::fib::Fibonacci;
-use crate::network::{ConnectNode, GetClusterSummary, };
-use crate::ports::http::entities::{ConnectionAcknowledged};
+use crate::network::{messages, ConnectNode, GetClusterSummary, };
+
+fn node_id_from_path( req: &HttpRequest ) -> Result<u64, std::num::ParseIntError> {
+    req.match_info()
+        .get("uid")
+        .unwrap_or("").trim()
+        .parse::<u64>()
+}
 
 // NodeInfoMessage > ChangeClusterMembershipResponse
-pub fn join_cluster_route(
-    body: web::Json<NodeInfoMessage>,
+pub fn connect_node_route(
+    body: web::Json<entities::NodeInfoMessage>,
     req: HttpRequest,
     _stream: web::Payload,
     srv: web::Data<Arc<PortData>>,
@@ -49,9 +55,11 @@ pub fn join_cluster_route(
                 .and_then(move |res| {
                     info!("fibonacci response: {:?}", res);
                     let answer = res.unwrap().into();
-                    let resp = ChangeClusterMembershipResponse {
-                        response: Some(change_cluster_membership_response::Response::Result(
-                            ConnectionAcknowledged { node_id: Some(answer), }
+                    let resp = entities::RaftProtocolResponse {
+                        response: Some(entities::raft_protocol_command_response::Response::Result(
+                            entities::ResponseResult::ConnectionAcknowledged {
+                                node_id: Some(answer),
+                            }
                         ))
                     };
 
@@ -61,7 +69,7 @@ pub fn join_cluster_route(
 }
 
 // NodeIdMessage > ChangeClusterMembershipResponse
-pub fn leave_cluster_route(
+pub fn disconnect_node_route(
     req: HttpRequest,
     _stream: web::Payload,
     _srv: web::Data<Arc<PortData>>,
@@ -105,8 +113,8 @@ pub fn all_nodes_route(
     //     .and_then(|res| Ok(HttpResponse::Ok().json(res)))
     //todo
     info!("get all nodes");
-    let resp = ClusterNodesResponse {
-        nodes: std::collections::HashMap::<u64, NodeInfo>::new(),
+    let resp = entities::ClusterNodesResponse {
+        nodes: std::collections::HashMap::<u64, entities::NodeInfo>::new(),
     };
 
     future::ok(HttpResponse::Ok().json(resp))
@@ -138,7 +146,7 @@ pub fn state_route(
 
 // AppendEntries: RaftAppendEntriesRequest > RaftAppendEntriesResponse
 pub fn append_entries_route(
-    _body: web::Json<RaftAppendEntriesRequest>,
+    _body: web::Json<entities::RaftAppendEntriesRequest>,
     _req: HttpRequest,
     _stream: web::Payload,
     _srv: web::Data<Arc<PortData>>,
@@ -149,7 +157,7 @@ pub fn append_entries_route(
 
 // InstallSnaphot: RaftInstallSnapshotRequest > RaftInstallSnapshotResponse
 pub fn install_snapshot_route(
-    _body: web::Json<RaftInstallSnapshotRequest>,
+    _body: web::Json<entities::RaftInstallSnapshotRequest>,
     _req: HttpRequest,
     _stream: web::Payload,
     _srv: web::Data<Arc<PortData>>,
@@ -160,7 +168,7 @@ pub fn install_snapshot_route(
 
 // Vote: RaftVoteRequest > RaftVoteResponse
 pub fn vote_route(
-    body: web::Json<RaftVoteRequest>,
+    body: web::Json<entities::RaftVoteRequest>,
     _req: HttpRequest,
     _stream: web::Payload,
     _srv: web::Data<Arc<PortData>>,
@@ -169,7 +177,7 @@ pub fn vote_route(
 
     let vote_req = body.into_inner();
 
-    let resp = RaftVoteResponse {
+    let resp = entities::RaftVoteResponse {
         term: vote_req.term,
         vote_granted: false,
         is_candidate_unknown: false,
@@ -178,9 +186,42 @@ pub fn vote_route(
     future::ok( HttpResponse::Ok().json(resp))
 }
 
-fn node_id_from_path( req: &HttpRequest ) -> Result<u64, std::num::ParseIntError> {
-    req.match_info()
-        .get("uid")
-        .unwrap_or("").trim()
-        .parse::<u64>()
+#[tracing::instrument(skip(_stream, _src))]
+pub fn raft_protocol_route(
+    body: web::Json<entities::RaftProtocolCommand>,
+    _req: HttpRequest,
+    _stream: web::Payload,
+    _src: web::Data<Arc<PortData>>,
+) -> impl Future<Item = HttpResponse, Error = Error> {
+    let command = body.into_inner();
+    info!("RAFT protocol:{:?}", command);
+
+    route_raft_command(command)
+        .map_err(|err| Error::from(err))
+        .map(|resp| { entities::raft_protocol_command_response::Response::Result(
+            entities::ResponseResult::ConnectionAcknowledged { node_id: None }
+        )})
+        .map(|resp| HttpResponse::Ok().json(resp) )
 }
+
+#[tracing::instrument]
+fn route_raft_command(
+    command: entities::RaftProtocolCommand
+) -> impl Future<Item = (), Error = messages::RaftProtocolError> {
+    match command {
+        entities::RaftProtocolCommand::ProposeConfigChange {add_members, remove_members} => {
+            debug!("routing to ProposeConfigChange...");
+            handle_raft_propose_config_change(add_members, remove_members)
+        },
+    }
+}
+
+#[tracing::instrument]
+fn handle_raft_propose_config_change(
+    add_members: Vec<entities::NodeId>,
+    remove_members: Vec<entities::NodeId>
+) -> impl Future<Item = (), Error = messages::RaftProtocolError> {
+    info!("");
+    future::ok(())
+}
+

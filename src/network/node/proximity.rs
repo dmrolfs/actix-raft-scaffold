@@ -6,7 +6,8 @@ use crate::NodeInfo;
 use super::{Node, NodeError};
 use crate::ports::http::entities::NodeInfoMessage;
 use crate::network::messages;
-use crate::ports::http::entities::{self, change_cluster_membership_response as entities_response};
+use crate::ports::http::entities::{self, raft_protocol_command_response as entities_response};
+
 
 pub trait ChangeClusterBehavior {
     fn change_cluster_config(
@@ -74,7 +75,7 @@ impl ConnectionBehavior for LocalNode {
         local_id_info: (NodeId, &NodeInfo),
         _ctx: &mut <Node as Actor>::Context
     ) -> Result<messages::ConnectionAcknowledged, NodeError> {
-        debug!("connect for local Node#{}->{}", local_id_info.0, self.id);
+        debug!(local_id = local_id_info.0, node_id = self.id, "connect for local Node");
         Ok(messages::ConnectionAcknowledged {})
     }
 
@@ -174,8 +175,10 @@ impl ConnectionBehavior for RemoteNode {
     ) -> Result<messages::ConnectionAcknowledged, NodeError> {
         let register_node_route = format!("{}/nodes/{}", self.scope(), self.remote_id);
         debug!(
-            "connect Node#{} to RemoteNode#{} via {}",
-            local_id_info.0, self.remote_id, register_node_route
+            local_id = local_id_info.0,
+            remote_id = self.remote_id,
+            "connect to RemoteNode via {}",
+            register_node_route
         );
 
         let body = NodeInfoMessage {
@@ -189,7 +192,7 @@ impl ConnectionBehavior for RemoteNode {
             .json(&body)
             .send()
             .map_err(|err| self.convert_error(err))?
-            .json::<entities::ChangeClusterMembershipResponse>()
+            .json::<entities::RaftProtocolResponse>()
             .map_err(|err| self.convert_error(err))
             .and_then(|cresp| {
                 if let Some(response) = cresp.response {
@@ -205,8 +208,8 @@ impl ConnectionBehavior for RemoteNode {
 
                         entities_response::Response::CommandRejectedNotLeader(leader) => {
                             Err(NodeError::RemoteNotLeaderError {
-                                leader_id: Some(leader.leader_id.into()),
-                                leader_address: Some(leader.leader_address.to_owned()),
+                                leader_id: leader.leader_id.map(|id| id.into()),
+                                // leader_address: Some(leader.leader_address.to_owned()),
                             })
                         }
                     }
@@ -221,7 +224,7 @@ impl ConnectionBehavior for RemoteNode {
 
     #[tracing::instrument(skip(self, _ctx))]
     fn disconnect(&mut self, _ctx: &mut <Node as Actor>::Context) -> Result<(), NodeError> {
-        info!("disconnecting {:?}", self);
+        info!(remote_id = self.remote_id, "disconnecting RemoteNode");
         Ok(())
     }
 }

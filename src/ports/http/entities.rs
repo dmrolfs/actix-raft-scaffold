@@ -1,5 +1,23 @@
 use serde::{Serialize, Deserialize};
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all="camelCase")]
+pub enum RaftProtocolCommand {
+    ProposeConfigChange { add_members: Vec<NodeId>, remove_members: Vec<NodeId> },
+}
+
+// pub mod raft_protocol_command_response {
+//     use serde::{Serialize, Deserialize};
+//
+//     #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+//     #[serde(rename_all="camelCase")]
+//     pub(crate) enum RaftProtocolResponse {
+//         Acknowledged,
+//         Failure(super::Failure),
+//         C
+//     }
+//
+// }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -93,8 +111,8 @@ impl Into<crate::NodeInfo> for NodeInfo {
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CommandRejectedNotLeader {
-    pub leader_id: NodeId,
-    pub leader_address: std::string::String,
+    pub leader_id: ::std::option::Option<NodeId>,
+    // pub leader_address: std::string::String,
 }
 
 /// Raft log entry.
@@ -340,17 +358,17 @@ pub struct RaftVoteResponse {
 
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ChangeClusterMembershipResponse {
-    pub response: ::std::option::Option<change_cluster_membership_response::Response>,
+pub struct RaftProtocolResponse {
+    pub response: ::std::option::Option<raft_protocol_command_response::Response>,
 }
 
-pub mod change_cluster_membership_response {
+pub mod raft_protocol_command_response {
     use serde::{Serialize, Deserialize};
 
     #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
     #[serde(rename_all = "camelCase")]
     pub enum Response {
-        Result(super::ConnectionAcknowledged),
+        Result(super::ResponseResult),
         Failure(super::Failure),
         CommandRejectedNotLeader(super::CommandRejectedNotLeader),
     }
@@ -358,23 +376,15 @@ pub mod change_cluster_membership_response {
 
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ConnectionAcknowledged {
-    pub node_id: ::std::option::Option<NodeId>,
+pub enum ResponseResult {
+    ConnectionAcknowledged { node_id: ::std::option::Option<NodeId>, },
 }
 
-// impl From<crate::network::messages::ConnectionAcknowledged> for ConnectionAcknowledged {
-//     fn from(that: crate::network::messages::ConnectionAcknowledged) -> Self {
-//         Self {
-//             node_id: that.node_id.map(|id| id.into()),
-//         }
+// impl Into<crate::network::messages::ConnectionAcknowledged> for ConnectionAcknowledged {
+//     fn into(self) -> crate::network::messages::ConnectionAcknowledged {
+//         crate::network::messages::ConnectionAcknowledged {}
 //     }
 // }
-
-impl Into<crate::network::messages::ConnectionAcknowledged> for ConnectionAcknowledged {
-    fn into(self) -> crate::network::messages::ConnectionAcknowledged {
-        crate::network::messages::ConnectionAcknowledged {}
-    }
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[repr(i32)]

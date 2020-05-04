@@ -9,6 +9,7 @@ use super::node::NodeStatus;
 use crate::{
     NodeInfo,
     ports,
+    ports::http::entities,
 };
 
 
@@ -39,6 +40,118 @@ pub enum NetworkError {
     Unknown(String),
 }
 
+#[derive(Error, Debug)]
+pub enum RaftProtocolError {
+    /// An error related to the processing of the config change request.
+    ///
+    /// Errors of this type will only come about from the internals of applying the config change
+    /// to the Raft log and the process related to that workflow.
+    #[error("An error related to the processing of the config change request:{0}")]
+    ClientError(String),
+
+    /// The given config would leave the cluster in an inoperable state.
+    ///
+    /// This error will be returned if the full set of changes, once fully applied, would leave
+    /// the cluster with less than two members.
+    #[error("The given config would leave the cluster in an inoperable state.")]
+    InoperableConfig,
+
+    /// An internal error has taken place.
+    ///
+    /// These should never normally take place, but if one is encountered, it should be safe to
+    /// retry the operation.
+    #[error("An internal error has taken place.")]
+    Internal,
+
+    /// The node the config change proposal was sent to was not the leader of the cluster.
+    ///
+    /// If the current cluster leader is known, its ID will be wrapped in this variant.
+    #[error("The node the config change proposal was sent to was not the leader of the cluster - leader:{0:?}")]
+    NodeNotLeader(Option<NodeId>),
+
+    /// The proposed config changes would make no difference to the current config.
+    ///
+    /// This takes into account a current joint consensus and the end result of the config.
+    ///
+    /// This error will be returned if the proposed add & remove elements are empty; all of the
+    /// entries to be added already exist in the current config and/or all of the entries to be
+    /// removed have already been scheduled for removal and/or do not exist in the current config.
+    #[error("The proposed config changes would make no difference to the current config.")]
+    Noop,
+}
+
+use http::status::StatusCode;
+
+impl actix_web::ResponseError for RaftProtocolError {
+    fn error_response(&self) -> actix_http::Response<actix_web::body::Body> {
+        match self {
+            RaftProtocolError::NodeNotLeader(id) => {
+                actix_http::Response::new(StatusCode::TEMPORARY_REDIRECT)
+            },
+
+            _ => {
+                actix_http::Response::new(StatusCode::INTERNAL_SERVER_ERROR)
+            },
+        }
+    }
+}
+
+impl<D, R, E> From<actix_raft::admin::ProposeConfigChangeError<D, R, E>> for RaftProtocolError
+where
+    D: actix_raft::AppData,
+    R: actix_raft::AppDataResponse,
+    E: actix_raft::AppError,
+{
+    fn from(error: actix_raft::admin::ProposeConfigChangeError<D, R, E>) -> Self {
+        match error {
+            actix_raft::admin::ProposeConfigChangeError::ClientError(client_err) => {
+                let description = format!("{}", client_err);
+                RaftProtocolError::ClientError(description)
+            },
+
+            actix_raft::admin::ProposeConfigChangeError::InoperableConfig => {
+                RaftProtocolError::InoperableConfig
+            },
+
+            actix_raft::admin::ProposeConfigChangeError::Internal => {
+                RaftProtocolError::Internal
+            },
+
+            actix_raft::admin::ProposeConfigChangeError::NodeNotLeader(id) => {
+                RaftProtocolError::NodeNotLeader(id)
+            },
+
+            actix_raft::admin::ProposeConfigChangeError::Noop => {
+                RaftProtocolError::Noop
+            },
+        }
+    }
+}
+
+impl Into<entities::raft_protocol_command_response::Response> for RaftProtocolError {
+    fn into(self) -> entities::raft_protocol_command_response::Response {
+        match self {
+            RaftProtocolError::NodeNotLeader(id) => {
+                entities::raft_protocol_command_response::Response::CommandRejectedNotLeader(
+                    entities::CommandRejectedNotLeader { leader_id: id.map(|i| i.into()) }
+                )
+            },
+
+            RaftProtocolError::ClientError(description) => {
+                entities::raft_protocol_command_response::Response::Failure(
+                    entities::Failure { description }
+                )
+            },
+
+            err => {
+                entities::raft_protocol_command_response::Response::Failure(
+                    entities::Failure { description: err.to_string() }
+                )
+            },
+        }
+    }
+}
+
 #[derive(Message, Debug, Clone, Serialize, Deserialize)]
 pub struct HandleNodeStatusChange {
     pub id: NodeId,
@@ -57,6 +170,19 @@ impl Message for ConnectNode {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct ConnectionAcknowledged {}
+
+impl From<entities::ResponseResult> for ConnectionAcknowledged {
+    fn from(that: entities::ResponseResult) -> Self {
+        match that {
+            entities::ResponseResult::ConnectionAcknowledged {node_id} => {
+                Self {}
+            },
+
+            _ => panic!("cannot create ConnectionAcknowledged from other protocol result:{:?}", that),
+        }
+    }
+}
+
 
 #[derive(Debug, StrumDisplay, Serialize, Deserialize, Clone, Copy)]
 #[serde(rename_all = "camelCase")]

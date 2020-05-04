@@ -11,13 +11,15 @@ use mockito::{mock, server_address, Matcher};
 use ::config::Config;
 use actix::prelude::*;
 use actix_raft::NodeId;
-use actix_raft_grpc::{utils, NodeInfo};
-use actix_raft_grpc::ring::Ring;
-use actix_raft_grpc::network::{Network, BindEndpoint, GetClusterSummary};
-use actix_raft_grpc::network::state::{Extent, Status};
-use actix_raft_grpc::config::Configuration;
-use actix_raft_grpc::fib::FibActor;
-use actix_raft_grpc::ports::{PortData, http::entities};
+use actix_raft_scaffold::{utils, NodeInfo};
+use actix_raft_scaffold::ring::Ring;
+use actix_raft_scaffold::network::{Network, NetworkError};
+use actix_raft_scaffold::network::{BindEndpoint, GetClusterSummary, ConnectNode};
+use actix_raft_scaffold::network::state::{Extent, Status};
+use actix_raft_scaffold::config::Configuration;
+use actix_raft_scaffold::fib::FibActor;
+use actix_raft_scaffold::ports::{PortData, http::entities};
+use actix_raft_scaffold::network::summary::ClusterSummary;
 
 
 const NODE_A_ADDRESS: &str = "127.0.0.1:8000";
@@ -262,33 +264,28 @@ fn test_network_bind() {
     let b_path_exp = format!("/api/cluster/nodes/{}", node_b_id );
     info!("mock b path = {}", b_path_exp);
 
-    let e_1 = entities::ChangeClusterMembershipResponse {
-        response: Some(entities::change_cluster_membership_response::Response::Result(
-            entities::ConnectionAcknowledged {
-                node_id: Some(entities::NodeId { id: node_b_id }),
-                // action: entities::MembershipAction::Added,
-            }
+    let b_response = entities::RaftProtocolResponse {
+        response: Some(entities::raft_protocol_command_response::Response::Result(
+            entities::ResponseResult::ConnectionAcknowledged {
+                node_id: Some(entities::NodeId { id: node_b_id })
+            },
         ))
     };
-    info!("mock b e_1:{:?} = json:{:?}", e_1, serde_json::to_string(&e_1));
-
-    let b_resp = format!(
-        "{}{}{}",
-        r#"{"response":{"result":{"nodeId":{"id":"#,
-        node_b_id,
-        r#"},"action":"Added"}}}"#
-    );
-    info!("mock b resp = |{}|", b_resp);
+    let b_connect_ack_json = serde_json::to_string(&b_response).unwrap();
+    info!("mock b resp = |{}|", b_connect_ack_json);
 
     let nb_mock = mock( "POST", Matcher::Regex(b_path_exp))
         .with_header("content-type", "application/json")
-        .with_body(b_resp)
+        .with_body(b_connect_ack_json)
         .expect(1)
         .create();
     // let nb_mock = mock("POST", b_path.as_str()).expect(1).create();
     let _nb_bad_mock = mock("POST", "/api/cluster").expect(0).create();
 
     {
+        let s = span!(Level::INFO, "build_network");
+        let _ = s.enter();
+
         let mut network = make_test_network(&node_a);
         network.configure_with(&config);
         let network_addr = network.start();
@@ -319,6 +316,9 @@ fn test_network_bind() {
                 panic!(err)
             })
             .and_then(move |res| {
+                let s = span!(Level::INFO, "assert_results");
+                let _ = s.enter();
+
                 let actual = res.unwrap();
                 info!("B: actual cluster summary:{:?}", actual);
 
@@ -350,6 +350,9 @@ fn test_network_bind() {
                 Ok(())
             })
             .then(|res| {
+                let s = span!(Level::INFO, "clean_up");
+                let _ = s.enter();
+
                 info!("test finished -- wrapping up");
                 actix::System::current().stop();
                 res
@@ -364,11 +367,123 @@ fn test_network_bind() {
         assert!(sys.run().is_ok(), "error during test");
     }
 
+    let s = span!(Level::INFO, "assert_mock");
+    let _ = s.enter();
     info!("ASSERTING MOCK service: {:?}", nb_mock);
     nb_mock.assert();
 }
 
 #[test]
-fn test_handle_cmd_connect_node() {
-    unimplemented!()
+fn test_handle_cmd_connect_node() -> Result<(), NetworkError> {
+    fixtures::setup_logger();
+    let span = span!(Level::INFO, "test_handle_cmd_connect_node");
+    let _ = span.enter();
+
+    let sys = System::builder().stop_on_panic(true).name("test-handle-connect").build();
+
+    let node_a = make_node_a("[::1]:8888".parse().unwrap());
+    let node_a_1 = node_a.clone();
+    let node_a_2 = node_a.clone();
+    let node_b = make_node_b(server_address());
+    // let node_b = make_node_b("[::1]:8080".parse().unwrap());
+    let config = make_test_configuration("node_a", vec![&node_a, &node_b]);
+
+    let node_b_id = crate::utils::generate_node_id(node_b.cluster_address.clone());
+    let b_path_exp = format!("/api/cluster/nodes/{}", node_b_id);
+    info!("mock b path = {}", b_path_exp);
+    let b_connect_response = entities::RaftProtocolResponse {
+        response: Some(entities::raft_protocol_command_response::Response::Result(
+            entities::ResponseResult::ConnectionAcknowledged {
+                node_id: Some(entities::NodeId { id: node_b_id })
+            },
+        ))
+    };
+    let b_connect_ack_json = serde_json::to_string(&b_connect_response).unwrap();
+    info!("mock b resp = |{}|", b_connect_ack_json);
+
+    let nb_mock = mock( "POST", Matcher::Regex(b_path_exp))
+        .with_header("content-type", "application/json")
+        .with_body(b_connect_ack_json)
+        .expect(1)
+        .create();
+
+    {
+        let mut network = make_test_network(&node_a);
+        network.configure_with(&config);
+        let network_addr = network.start();
+        let n1 = network_addr.clone();
+        let n2 = network_addr.clone();
+        let n3 = network_addr.clone();
+
+        let fib_act = FibActor::new();
+        let fib_addr = fib_act.start();
+
+        let data = PortData {
+            fib: fib_addr,
+            network: network_addr.clone(),
+        };
+
+        let test = network_addr.send( BindEndpoint::new(data))
+            .map_err(|err| {
+                error!("error in bind:{:?}", err);
+                panic!(err)
+            })
+            .and_then( |_| {
+                Delay::new( Instant::now() + Duration::from_secs(1)).map_err(|err| panic!(err))
+            })
+            .and_then(move |_| {
+                let s = span!(Level::INFO, "verify_network_baseline");
+                s.enter();
+
+                n1.send(GetClusterSummary).from_err()
+            })
+            // .from_err()
+            .and_then(move |summary| {
+                info!("baseline summary:{:?}", summary);
+                let actual = summary.unwrap();
+                assert_eq!(actual.id, utils::generate_node_id("[::1]:8888"));
+                assert_eq!(actual.info, node_a_1);
+                assert_eq!(actual.state.isolated_nodes().is_empty(), true);
+                assert_eq!(actual.state.unwrap(), Status::Joining);
+                assert_eq!(actual.state.extent(), Extent::Cluster);
+                assert_eq!(actual.state.connected_nodes().len(), 2);
+                debug_assert!(actual.metrics.is_none(), "no raft metrics");
+                futures::future::ok::<ClusterSummary, NetworkError>(actual)
+            })
+            .and_then(move |summary| {
+                n2.send(ConnectNode{id: node_b_id, info: node_b.clone()}).from_err()
+            })
+            // .from_err()
+            .and_then(move |ack| {
+                n3.send(GetClusterSummary).from_err()
+            })
+            // .from_err()
+            .and_then(move |summary| {
+                info!("AFTER COnnect summary:{:?}", summary);
+                let actual = summary.unwrap();
+                assert_eq!(actual.id, utils::generate_node_id("[::1]:8888"));
+                assert_eq!(actual.info, node_a_2);
+                assert_eq!(actual.state.isolated_nodes().is_empty(), true);
+                assert_eq!(actual.state.unwrap(), Status::Joining);
+                assert_eq!(actual.state.extent(), Extent::Cluster);
+                assert_eq!(actual.state.connected_nodes().len(), 2);
+                debug_assert!(actual.metrics.is_none(), "no raft metrics");
+                futures::future::ok::<ClusterSummary, NetworkError>(actual)
+            })
+            .then(|res| {
+                actix::System::current().stop();
+                Ok(())
+            });
+            // .and_then( |_| network.send( ConnectNode { id: node_b_id, info: node_b.clone() }))
+            // .map_err( |err| panic!(err))
+            // .and_then(|res| {
+            //     WORK HERE
+            // })
+
+        spawn(test);
+        assert!(sys.run().is_ok(), "error during test");
+    }
+
+    nb_mock.assert();
+    Ok(())
 }

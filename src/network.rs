@@ -116,7 +116,7 @@ impl Network {
 
     #[tracing::instrument(skip(self, c))]
     pub fn configure_with(&mut self, c: &Configuration) {
-        info!("configuration:{:?}", c);
+        info!(network_id = self.id, "configuration:{:?}", c);
 
         for n in c.nodes.values() {
             let id = utils::generate_node_id(n.cluster_address.as_str());
@@ -179,7 +179,7 @@ impl Network {
             Some(node_ref) => {
                 node_ref.info = Some(node_info.clone());
                 if node_ref.addr.is_none() {
-                    info!(network_id = self.id, "Starting node#{}...", node_ref.id);
+                    info!(network_id = self.id, node_id = node_ref.id, "Starting node...");
 
                     let node = Node::new(
                         node_ref.id,
@@ -268,9 +268,17 @@ impl Handler<BindEndpoint> for Network {
 
     #[tracing::instrument(skip(self, _ctx))]
     fn handle(&mut self, bind: BindEndpoint, _ctx: &mut Self::Context) -> Self::Result {
-        info!(network_id = self.id, "Network binding to http endpoint: {}...", self.info.cluster_address);
+        info!(
+            network_id = self.id,
+            endpoint_address = self.info.cluster_address.as_str(),
+            "Network binding to http endpoint..."
+        );
         let server = ports::http::start_server(self.info.cluster_address.as_str(), bind.data)?;
-        info!(network_id = self.id, "Network http endpoint: {} started.", self.info.cluster_address);
+        info!(
+            network_id = self.id,
+            endpoint_address = self.info.cluster_address.as_str(),
+            "Network http endpoint started."
+        );
         self.server = Some(server);
         Ok(())
     }
@@ -443,17 +451,26 @@ impl Handler<HandleNodeStatusChange> for Network {
 
     #[tracing::instrument(skip(self, _ctx))]
     fn handle(&mut self, msg: HandleNodeStatusChange, _ctx: &mut Self::Context) -> Self::Result {
-        info!("Node#{} status changed to: {}", msg.id, msg.status);
+        info!(network_id = self.id, node_id = msg.id, status = ?msg.status, "Node status changed");
         if self.nodes.contains_key(&msg.id) {
             match msg.status {
                 NodeStatus::Initialized => { self.isolate_node(msg.id); },
                 NodeStatus::WeaklyConnected => { self.isolate_node(msg.id); },
                 NodeStatus::Connected => { self.restore_node(msg.id); },
                 NodeStatus::Failure(attempts) => {
-                    info!("Node#{} having trouble connecting with {} attempts", msg.id, attempts);
+                    info!(
+                        network_id = self.id,
+                        node_id = msg.id,
+                        attempts,
+                        "Node having trouble connecting."
+                    );
                 },
                 NodeStatus::Disconnected => {
-                    info!("This network cannot reach Node#{} - isolating.", msg.id);
+                    info!(
+                        network_id = self.id,
+                        node_id = msg.id,
+                        "Network cannot reach Node - isolating."
+                    );
                     self.isolate_node(msg.id);
                 },
             };
@@ -468,7 +485,7 @@ impl Network {
         self.nodes.get(&id).map(|node_ref| node_ref.addr.clone()).flatten()
     }
 
-    #[tracing::instrument(skip(self, ctx))]
+    #[tracing::instrument(skip(self, command, ctx))]
     fn handle_connect_to_remote_node(
         &mut self,
         command: ConnectNode,
@@ -477,13 +494,13 @@ impl Network {
         fut::result(
         match self.node_for_id(command.id) {
                 Some(node) => {
-                    debug!("Node#{} exists - completing connection", command.id);
+                    debug!(network_id = self.id, "Node#{} exists - completing connection", command.id);
                     node.do_send(command.clone());
                     Ok(())
                 },
 
                 None => {
-                    debug!("Node#{} does not exist - registering", command.id);
+                    debug!(network_id = self.id, "Node#{} does not exist - registering", command.id);
                     self.register_node(command.id, &command.info, ctx.address())
                 },
             }
@@ -504,7 +521,7 @@ impl Network {
         E: From<actix::MailboxError>,
         E: From<NetworkError>,
     {
-        debug!(network_id = self.id, "delegating command to leader:{:?}", command);
+        debug!(network_id = self.id, ?command, "delegating command to leader...");
 
         Box::new(
             self.leader_delegate()

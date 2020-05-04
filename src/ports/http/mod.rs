@@ -32,11 +32,12 @@ where
                 web::scope("/api/cluster")
                     // .service( web::resource("/echo").to_async(echo))
                     .service(web::resource("/nodes").to_async(all_nodes_route))
+                    .service(web::resource("/raft").route(web::post().to_async(raft_protocol_route)))
                     .service(
                         web::resource("/nodes/{uid}")
                             .route(web::get().to_async(node_route))
-                            .route(web::post().to_async(join_cluster_route))
-                            .route(web::delete().to_async(leave_cluster_route)),
+                            .route(web::post().to_async(connect_node_route))
+                            .route(web::delete().to_async(disconnect_node_route)),
                     )
                     .service(web::resource("/state").route(web::get().to_async(state_route)))
                     .service(web::resource("/entries").route(web::post().to_async(append_entries_route)))

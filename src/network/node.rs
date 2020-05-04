@@ -42,10 +42,10 @@ pub enum NodeError {
     PayloadError(String),
     // PayloadError(actix_web::error::PayloadError),
 
-    #[error("Remote node is not leader. Redirect to node#{leader_id:?} at {leader_address:?}.")]
+    #[error("Remote node is not leader. Redirect to node#{leader_id:?}.")]
     RemoteNotLeaderError {
         leader_id: Option<NodeId>,
-        leader_address: Option<String>,
+        // leader_address: Option<String>,
     },
 
     #[error("unknown node error: {0}")]
@@ -109,7 +109,7 @@ impl Node {
     ) -> Self {
         let proximity = Node::determine_proximity(local_id, id, &info);
 
-        info!("[Node#{}] Creating Node#{} as {}", local_id, id, proximity);
+        info!(local_id, node_id = id, ?proximity, "Creating Node");
 
         Node {
             id,
@@ -137,7 +137,7 @@ impl Node {
 
     #[tracing::instrument(skip(self))]
     fn apply_status_change(&mut self, status: NodeStatus ) {
-        info!("changing node#{} to {}", self.id, status);
+        info!(local_id = self.local_id, node_id = self.id, "changing node status to {}", status);
         let new_status = match status {
             NodeStatus::Initialized => {
                 panic!(
@@ -150,8 +150,9 @@ impl Node {
 
             NodeStatus::Failure(attempts) if 3 < attempts=> {
                 warn!(
-                    "Node#{} failed too many ({}) connections attempts - marking as {}",
-                    self.id, attempts, NodeStatus::Disconnected
+                    local_id = self.local_id, node_id = self.id, attempts,
+                    "Node failed too many connection attempts - marking as {}",
+                    NodeStatus::Disconnected
                 );
 
                 NodeStatus::Disconnected
@@ -196,7 +197,7 @@ impl Actor for Node {
     #[tracing::instrument(skip(self, ctx))]
     fn stopping(&mut self, ctx: &mut Self::Context) -> Running {
         self.disconnect(ctx);
-        info!("Node #{} disconnected", self.id);
+        info!(local_id = self.local_id, node_id = self.id, "Node disconnected");
         Running::Stop
     }
 }
@@ -217,7 +218,9 @@ impl Handler<Connect> for Node {
     fn handle(&mut self, _msg: Connect, ctx: &mut Self::Context) -> Self::Result {
         let task = self.connect(ctx)
             .map_err(|err, node, _| {
-                warn!("error during connection to remote node#{}:{}", node.id, err);
+                warn!(
+                    local_id = node.local_id, node_id = node.id, error = ?err,
+                    "error during connection to remote node.");
             })
             .and_then(|ack, node, ctx| {
                 node.handle_connect_result(ack, ctx)
@@ -234,7 +237,7 @@ impl Node {
         ack: ConnectionAcknowledged,
         _ctx: &mut <Node as Actor>::Context
     ) -> impl ActorFuture<Actor=Self, Item=(), Error=()> {
-        info!("connection made to node#{}: {:?}", self.id, ack);
+        info!(local_id = self.local_id, node_id = self.id, "connection made to node: {:?}", ack);
         self.apply_status_change(NodeStatus::Connected);
         fut::ok(())
     }
@@ -249,7 +252,10 @@ impl Node {
         if self.status.is_connected() {
             return fut::ok(ConnectionAcknowledged {});
         } else {
-            info!("Connecting Node#{}({:?}) to {}...", self.local_id, self.status, self.proximity);
+            info!(
+                local_id = self.local_id, node_id = self.id, proximity = ?self.proximity,
+                "Connecting Node..."
+            );
             let task = self.proximity.connect((self.local_id, &self.local_info), ctx)
                 .map_err(|err| {
                     //todo consider limiting retries
@@ -259,16 +265,21 @@ impl Node {
                     };
 
                     warn!(
-                        "{:?} in connection attempt local_id#{} => node#{}: {:?}",
-                        new_status, self.local_id, self.id, err
+                        local_id = self.local_id, node_id = self.id,
+                        proximity = ?self.proximity, error = ?err,
+                        "{:?} in connection attempt.", new_status
                     );
 
                     self.apply_status_change(new_status);
 
+                    let delay = Duration::from_secs(3);
                     ctx.run_later(
-                        Duration::from_secs(3),
-                        |node, ctx| {
-                            debug!("after delay trying again to connect to {}...", node.proximity);
+                        delay.clone(),
+                        move |node, ctx| {
+                            debug!(
+                                local_id = node.local_id, node_id = node.id, proximity = ?node.proximity,
+                                "after {:?} delay trying again to connect...", delay
+                            );
                             ctx.notify(Connect);
                         }
                     );
@@ -276,7 +287,10 @@ impl Node {
                     err
                 })
                 .and_then(|ack| {
-                    info!("Connection made local#{} to {}", self.local_id, self.proximity);
+                    info!(
+                        local_id = self.local_id, node_id = self.id, proximity = ?self.proximity,
+                        "Connection made."
+                    );
 
                     self.apply_status_change(NodeStatus::WeaklyConnected);
                     Ok(ack)
@@ -310,16 +324,26 @@ impl Node {
     #[tracing::instrument(skip(self, ctx))]
     fn disconnect(&mut self, ctx: &mut <Node as Actor>::Context) {
         if self.status.is_connected() == true {
-            info!("Disconnecting Node #{} from {}.", self.id, self.proximity);
+            info!(
+                local_id = self.local_id, node_id = self.id, proximity = ?self.proximity,
+                "Disconnecting node..."
+            );
             let res = self.proximity.disconnect(ctx);
             match res {
                 Ok(_) => {
-                    info!("Disconnection of local_id#{} from #{}:{}", self.local_id, self.id, self.proximity);
+                    info!(
+                        local_id = self.local_id, node_id = self.id, proximity = ?self.proximity,
+                        "Node disconnected."
+                    );
                     self.apply_status_change(NodeStatus::Disconnected );
                 }
 
                 Err(err) => {
-                    warn!("Error in disconnection of local_id#{} from node#{}: {:?}", self.local_id, self.id, err);
+                    warn!(
+                        local_id = self.local_id, node_id = self.id,
+                        proximity = ?self.proximity, error = ?err,
+                        "Error in node disconnection."
+                    );
                     let failure = match self.status {
                         NodeStatus::Failure(attempts) => NodeStatus::Failure(attempts + 1),
                         _status => NodeStatus::Failure(1),
@@ -382,7 +406,10 @@ impl Handler<ConnectNode> for Node {
         let task = fut::wrap_future::<_, Self>(ctx.address().send(change_msg))
             .map_err(|err, _, _| NetworkError::from(err))
             .and_then(move |res, node, _| {
-                info!(node_id = node.id, "node#{} join submitted to RAFT cluster: {:?}", msg.id, &msg.info);
+                info!(
+                    local_id = node.local_id, node_id = node.id, proximity = ?node.proximity,
+                    "node#{} join submitted to RAFT cluster: {:?}", msg.id, &msg.info
+                );
                 fut::result(
                     res
                         .map_err(|err| NetworkError::from(err))

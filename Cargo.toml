@@ -1,5 +1,5 @@
 [package]
-name = "actix-raft-grpc"
+name = "actix-raft-scaffold"
 version = "0.0.1"
 authors = ["Damon Rolfs <drolfs@gmail.com>"]
 edition = "2018"
@@ -15,11 +15,13 @@ mockito = "0.25"
 
 [dependencies]
 actix-web = "1.0.9"
+actix-http = "0.2.11"
 actix-web-actors = "1.0.2"
 actix-web-codegen = "0.2"
 actix-cors = "0.1.0"
 actix-files = "0.1.6"
 actix-server = "0.6"
+http = "0.1.17"
 tempfile = "3"
 #frunk = "0.3"
 #hash_ring = "0.1"
