@@ -145,6 +145,7 @@ impl Network {
     }
 
     fn leader_ref(&self) -> Option<&NodeRef> {
+        //todo: ?leave with RaftMetrics or query LocalNode's RAFT state?
         self.metrics
             .as_ref()
             .map(|m| {
@@ -255,6 +256,7 @@ impl Actor for Network {
 impl Handler<RaftMetrics> for Network {
     type Result = ();
 
+    #[tracing::instrument(skip(self, _ctx))]
     fn handle(&mut self, msg: RaftMetrics, _ctx: &mut Self::Context) -> Self::Result {
         debug!(
             network_id = self.id,
@@ -304,35 +306,40 @@ impl Handler<BindEndpoint> for Network {
     }
 }
 
-// #[derive(Debug)]
-// pub struct GetNode{
-// cluster_address or node_id???
-//     pub node_id: NodeId,
-// }
-//
-// impl GetNode {
-//     pub fn new(id: NodeId) -> Self { GetNode { node_id: id, }
-// }
-//
-// impl Message for GetNode {
-//     type Result = Result<(NodeId, String), NetworkError>;
-// }
-//
-// impl Handler<GetNode> for Network {
-//     type Result = Result<(NodeId, String), NetworkError>;
-//
-//     fn handle(&mut self, msg: GetNode, ctx: &mut Self::Context) -> Self::Result {
-//         let ring = self.ring.read()?;
-//         let node_id = ring.get_node(msg.cluster_address).unwrap();
-//         // let default_info = ;
-//         let node = self.nodes
-//             .get(node_id)
-//             .map(|r| r.info)
-//             .unwrap_or(NodeInfo::default());
-//
-//         Ok((*node_id, node.public_address.to_owned()))
-//     }
-// }
+#[derive(Debug, Clone)]
+pub struct GetNode {
+    pub node_id: Option<NodeId>,
+    pub cluster_address: Option<String>,
+}
+
+impl GetNode {
+    pub fn for_id(id: NodeId) -> Self { GetNode { node_id: Some(id), cluster_address: None, } }
+
+    pub fn for_cluster_address<S>(address: String) -> Self where S: AsRef<str>, {
+        GetNode { node_id: None, cluster_address: Some(address.to_string()), }
+    }
+}
+
+impl Message for GetNode {
+    type Result = Result<(NodeId, Option<NodeInfo>), NetworkError>;
+}
+
+impl Handler<GetNode> for Network {
+    type Result = Result<(NodeId, Option<NodeInfo>), NetworkError>;
+
+    fn handle(&mut self, msg: GetNode, ctx: &mut Self::Context) -> Self::Result {
+        let node_id = msg.node_id
+            .unwrap_or_else( || {
+                let ring = self.ring.read().unwrap();
+                msg.cluster_address
+                    .and_then(|addr| ring.get_node(addr).map(|id| *id))
+                    .unwrap_or(0)
+            });
+
+        let info = self.nodes.get(&node_id).and_then(|r| r.info.clone());
+        Ok((node_id, info))
+    }
+}
 
 // GetCurrentLeader //////////////////////////////////////////////////////////
 /// Get the current leader of the cluster from the perspective of the Raft metrics.
@@ -591,21 +598,21 @@ impl Network {
                         NetworkError::NotLeader{leader_id: _, leader_address: _} => {
                             warn!(
                                 network_id = network.id, command = ?command_desc_2, error = ?err,
-                                "Network is *not* elected leader -- retry???"
+                                "Network is *not* elected leader."
                             );
                         },
 
                         NetworkError::NoElectedLeader => {
                             warn!(
                                 network_id = network.id, command = ?command_desc_2, error = ?err,
-                                "No elected leader -- maybe ask to retry???"
+                                "No elected leader."
                             );
                         },
 
                         _ => {
                             error!(
                                 network_id = network.id, command = ?command_desc_2, error = ?err,
-                                "failure while looking for leader -- maybe ask to retry???"
+                                "failure while looking for leader."
                             );
                         },
                     };

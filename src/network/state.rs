@@ -117,7 +117,6 @@ impl NetworkState {
     pub fn isolated_nodes(&self) -> &HashSet<NodeId> { &self.isolated_nodes }
 
     pub fn extent(&self) -> Extent {
-        debug!("state.is_connected:{} connected_nodes:{:?}", self.is_connected(), self.connected_nodes);
         if 1 < self.connected_nodes.len() {
             Extent::Cluster
         } else {

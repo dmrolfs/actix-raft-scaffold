@@ -2,11 +2,11 @@ use actix::prelude::*;
 use tracing::*;
 use tracing_subscriber::fmt;
 use anyhow::{Result, Context};
-use actix_raft_grpc::{
-    fib::FibActor,
-    ports::PortData,
-    raft_system::*,
-};
+// use actix_raft_grpc::{
+    // fib::FibActor,
+    // ports::PortData,
+    // raft_system::*,
+// };
 
 // #[tokio::main]
 // async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -27,18 +27,18 @@ async fn main() -> Result<()> {
 
     let system = System::new("raft");
 
-    let raft = RaftSystem::new()?;
+    // let raft = RaftSystem::new()?;
 
-    let fib_arb = Arbiter::new();
-    let fib_act = FibActor::new();
-    let fib_addr = FibActor::start_in_arbiter(&fib_arb, |_| fib_act);
+    // let fib_arb = Arbiter::new();
+    // let fib_act = FibActor::new();
+    // let fib_addr = FibActor::start_in_arbiter(&fib_arb, |_| fib_act);
+    //
+    // let state = PortData {
+    //     fib: fib_addr,
+    //     network: raft.network.clone(),
+    // };
 
-    let state = PortData {
-        fib: fib_addr,
-        network: raft.network.clone(),
-    };
-
-    raft.start(state)?;
+    // raft.start(state)?;
 
     let _ = system.run();
     Ok(())
