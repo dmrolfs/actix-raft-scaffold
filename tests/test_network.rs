@@ -274,13 +274,13 @@ fn test_network_bind() {
     let b_connect_ack_json = serde_json::to_string(&b_response).unwrap();
     info!("mock b resp = |{}|", b_connect_ack_json);
 
-    let nb_mock = mock( "POST", Matcher::Regex(b_path_exp))
+    let node_connect_mock = mock("POST", Matcher::Regex(b_path_exp))
         .with_header("content-type", "application/json")
         .with_body(b_connect_ack_json)
         .expect(1)
         .create();
     // let nb_mock = mock("POST", b_path.as_str()).expect(1).create();
-    let _nb_bad_mock = mock("POST", "/api/cluster").expect(0).create();
+    let raft_mock = mock("POST", "/api/cluster/admin").expect(0).create();
 
     {
         let s = span!(Level::INFO, "build_network");
@@ -369,8 +369,9 @@ fn test_network_bind() {
 
     let s = span!(Level::INFO, "assert_mock");
     let _ = s.enter();
-    info!("ASSERTING MOCK service: {:?}", nb_mock);
-    nb_mock.assert();
+    info!("ASSERTING MOCK service: {:?}", node_connect_mock);
+    node_connect_mock.assert();
+    raft_mock.assert();
 }
 
 #[test]
@@ -406,6 +407,8 @@ fn test_handle_cmd_connect_node() -> Result<(), NetworkError> {
         .with_body(b_connect_ack_json)
         .expect(1)
         .create();
+
+    let raft_mock = mock("POST", "/api/cluster/admin").expect(0).create();
 
     {
         let mut network = make_test_network(&node_a);
@@ -485,5 +488,6 @@ fn test_handle_cmd_connect_node() -> Result<(), NetworkError> {
     }
 
     nb_mock.assert();
+    raft_mock.assert();
     Ok(())
 }

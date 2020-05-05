@@ -32,7 +32,7 @@ where
                 web::scope("/api/cluster")
                     // .service( web::resource("/echo").to_async(echo))
                     .service(web::resource("/nodes").to_async(all_nodes_route))
-                    .service(web::resource("/raft").route(web::post().to_async(raft_protocol_route)))
+                    .service(web::resource("/admin").route(web::post().to_async(raft_protocol_route)))
                     .service(
                         web::resource("/nodes/{uid}")
                             .route(web::get().to_async(node_route))

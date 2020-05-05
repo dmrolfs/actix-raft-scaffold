@@ -7,10 +7,14 @@ use tracing::*;
 use strum_macros::{Display as StrumDisplay};
 use serde::{Serialize, Deserialize};
 use crate::NodeInfo;
-use super::Network;
-use super::messages::{ConnectNode, ConnectionAcknowledged, NetworkError};
+use super::{Network, HandleNodeStatusChange};
+use super::messages::{
+    NetworkError,
+    ConnectNode, ConnectionAcknowledged,
+    ChangeClusterConfig,
+};
+
 use proximity::*;
-use crate::network::HandleNodeStatusChange;
 
 mod proximity;
 
@@ -356,43 +360,22 @@ impl Node {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct ChangeClusterConfig {
-    add_members: Vec<NodeId>,
-    remove_members: Vec<NodeId>,
-}
-
-impl ChangeClusterConfig {
-    pub fn new_to_add_remove(to_add: Vec<NodeId>, to_remove: Vec<NodeId>) -> Self {
-        Self { add_members: to_add, remove_members: to_remove, }
-    }
-
-    pub fn new_to_add(to_add: Vec<NodeId>) -> Self {
-        ChangeClusterConfig::new_to_add_remove(to_add, vec![])
-    }
-
-    pub fn new_to_remove(to_remove: Vec<NodeId>) -> Self {
-        ChangeClusterConfig::new_to_add_remove(vec![], to_remove)
-    }
-}
-
-impl Message for ChangeClusterConfig {
-    type Result = Result<(), NodeError>;
-}
-
 impl Handler<ChangeClusterConfig> for Node {
-    type Result = Result<(), NodeError>;
+    type Result = Result<(), NetworkError>;
 
-    #[tracing::instrument]
+    #[tracing::instrument(skip(self, ctx))]
     fn handle(&mut self, msg: ChangeClusterConfig, ctx: &mut Self::Context) -> Self::Result {
-        self.proximity.change_cluster_config(msg.add_members, msg.remove_members, ctx)
+        self.proximity
+            .change_cluster_config(msg.add_members, msg.remove_members, ctx)
+            .map_err(|err| NetworkError::from(err))
     }
 }
 
 impl Node {
     #[tracing::instrument]
     fn join_node(&self, node_id: NodeId, ctx: &<Node as Actor>::Context) -> Result<(), NodeError>{
-        self.proximity.change_cluster_config(vec![node_id], vec![], ctx)
+        self.proximity
+            .change_cluster_config(vec![node_id], vec![], ctx)
     }
 }
 

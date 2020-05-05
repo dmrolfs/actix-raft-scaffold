@@ -12,8 +12,8 @@ use crate::ports::http::entities::{self, raft_protocol_command_response as entit
 pub trait ChangeClusterBehavior {
     fn change_cluster_config(
         &self,
-        to_add: Vec<NodeId>,
-        to_remove: Vec<NodeId>,
+        add_members: Vec<NodeId>,
+        remove_members: Vec<NodeId>,
         ctx: &<Node as Actor>::Context
     ) -> Result<(), NodeError>;
 }
@@ -55,15 +55,14 @@ impl Display for LocalNode {
 impl ProximityBehavior for LocalNode {}
 
 impl ChangeClusterBehavior for LocalNode {
-    #[tracing::instrument]
+    #[tracing::instrument(skip(ctx))]
     fn change_cluster_config(
         &self,
-        to_add: Vec<NodeId>,
-        to_remove: Vec<NodeId>,
+        add_members: Vec<NodeId>,
+        remove_members: Vec<NodeId>,
         ctx: &<Node as Actor>::Context
     ) -> Result<(), NodeError> {
         let _node_addr = ctx.address();
-
         unimplemented!()
     }
 }
@@ -122,18 +121,57 @@ impl Debug for RemoteNode {
 impl ProximityBehavior for RemoteNode {}
 
 impl ChangeClusterBehavior for RemoteNode {
-    #[tracing::instrument]
+    #[tracing::instrument(skip(ctx))]
     fn change_cluster_config(
         &self,
-        to_add: Vec<NodeId>,
-        to_remove: Vec<NodeId>,
+        add_members: Vec<NodeId>,
+        remove_members: Vec<NodeId>,
         ctx: &<Node as Actor>::Context
     ) -> Result<(), NodeError> {
+        let command = entities::RaftProtocolCommand::ProposeConfigChange {
+            add_members: add_members.iter().map(|m| (*m).into()).collect(),
+            remove_members: remove_members.iter().map(|m| (*m).into()).collect(),
+        };
 
-        // client.put(cluster_nodes_route)
-        //     .header("Content-Type", "application/json")
-        //     .send_json(&act.id)
-        unimplemented!()
+
+        let post_raft_command_route = format!("{}/admin", self.scope());
+        debug!(
+            remote_id = self.remote_id,
+            ?command,
+            route = post_raft_command_route.as_str(),
+            "post Raft protocol command to (leader) RemoteNode."
+        );
+
+        self.client
+            // .get("https://my-json-server.typicode.com/dmrolfs/json-test-server/connection")
+            .post(&post_raft_command_route)
+            .json(&command)
+            .send()
+            .map_err(|err| self.convert_error(err))?
+            .json::<entities::RaftProtocolResponse>()
+            .map_err(|err| self.convert_error(err))
+            .and_then(|cresp| {
+                if let Some(response) = cresp.response {
+                    match response {
+                        entities_response::Response::Result(r) => Ok(()),
+
+                        entities_response::Response::Failure(f) => {
+                            Err(NodeError::ResponseFailure(f.description))
+                        }
+
+                        entities_response::Response::CommandRejectedNotLeader(leader) => {
+                            Err(NodeError::RemoteNotLeaderError {
+                                leader_id: leader.leader_id.map(|id| id.into()),
+                                // leader_address: Some(leader.leader_address.to_owned()),
+                            })
+                        }
+                    }
+                } else {
+                    Err(NodeError::Unknown(
+                        "good ChangeClusterResponse had empty response".to_string()
+                    ))
+                }
+            })
     }
 }
 

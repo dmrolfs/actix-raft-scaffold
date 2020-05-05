@@ -16,7 +16,7 @@ pub mod ring; //todo move into private and support tailoring via configuration
 
 pub use self::config::{Configuration, ConfigurationError, JoinStrategy};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct NodeInfo {
     pub name: String,

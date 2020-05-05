@@ -377,6 +377,7 @@ pub mod raft_protocol_command_response {
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ResponseResult {
+    Acknowledged,
     ConnectionAcknowledged { node_id: ::std::option::Option<NodeId>, },
 }
 

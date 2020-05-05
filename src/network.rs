@@ -25,6 +25,7 @@ pub use messages::{
     HandleNodeStatusChange,
     ConnectNode, ConnectionAcknowledged
 };
+use crate::network::messages::ChangeClusterConfig;
 
 pub mod state;
 pub mod node;
@@ -170,31 +171,50 @@ impl Network {
             };
             self.nodes.insert(node_id, node_ref);
         }
-        let node_ref = self.nodes.get(&node_id)
-            .expect(format!("NodeRef assigned for {}", node_id).as_str());
-
-        debug!(network_id = self.id, "Registering node {:?}...", &node_ref);
+        // let node_ref = self.nodes.get(&node_id)
+        //     .expect(format!("NodeRef assigned for {}", node_id).as_str());
+        //
+        // debug!(network_id = self.id, "Registering node {:?}...", &node_ref);
 
         match self.nodes.get_mut(&node_id) {
-            Some(node_ref) => {
-                node_ref.info = Some(node_info.clone());
-                if node_ref.addr.is_none() {
-                    info!(network_id = self.id, node_id = node_ref.id, "Starting node...");
-
-                    let node = Node::new(
-                        node_ref.id,
-                        node_info.clone(),
-                        self.id,
-                        self.info.clone(),
-                        self_addr,
-                    );
-
-                    node_ref.addr = Some(node.start());
-                }
-
+            Some(NodeRef{id, info: Some(info), addr: Some(addr)}) if info == node_info => {
+                info!(network_id = self.id, node_id = ?id, "node is current and connected - no further action.");
                 Ok(())
-            }
+            },
 
+            Some(node_ref) => {
+                info!(network_id = self.id, node_id = node_ref.id, "updating node info and connecting...");
+                node_ref.info = Some(node_info.clone());
+                let node = Node::new(
+                    node_id,
+                    node_info.clone(),
+                    self.id,
+                    self.info.clone(),
+                    self_addr,
+                );
+                node_ref.addr = Some(node.start());
+                Ok(())
+            },
+
+            // Some(node_ref) => {
+            //     node_ref.info = Some(node_info.clone());
+            //     if node_ref.addr.is_none() {
+            //         info!(network_id = self.id, node_id = node_ref.id, "Starting node...");
+            //
+            //         let node = Node::new(
+            //             node_ref.id,
+            //             node_info.clone(),
+            //             self.id,
+            //             self.info.clone(),
+            //             self_addr,
+            //         );
+            //
+            //         node_ref.addr = Some(node.start());
+            //     }
+            //
+            //     Ok(())
+            // }
+            //
             None => {
                 let err_msg = format!("No node#{} registered in Network#{}.", node_id, self.id);
                 Err(NetworkError::Unknown(err_msg))
@@ -420,13 +440,18 @@ impl Handler<GetClusterSummary> for Network {
 impl Network {
     /// Returns the Addr<Node> if this network is the leader; otherwise if there is consensus, a
     /// NotLeader error referencing the leader or notice there is no elected leader.
+    #[tracing::instrument(skip(self))]
     fn leader_delegate(&self) -> impl ActorFuture<Actor = Self, Item = Addr<Node>, Error = NetworkError> {
+        let leader = self.leader_ref();
         fut::result(
             match self.leader_ref() {
-                Some(NodeRef{ id, info: _, addr}) if id == &self.id && addr.is_some() => Ok(addr.clone().unwrap()),
+                Some(NodeRef{ id, info: _, addr}) if id == &self.id && addr.is_some() => {
+                    debug!(network_id = self.id, "Network's node is leader delegate.");
+                    Ok(addr.clone().unwrap())
+                },
 
                 Some(lref) => {
-                    Err(
+                    let err = Err(
                         if self.id == lref.id {
                             NetworkError::Unknown("Local leader node is not started".to_string())
                         } else if lref.info.is_some() {
@@ -437,10 +462,21 @@ impl Network {
                         } else {
                             NetworkError::Unknown(format!("Leader#{} actor is not registered.", lref.id))
                         }
-                    )
+                    );
+
+                    debug!(
+                        network_id = self.id, error = ?err,
+                        "Leader identified other than this network."
+                    );
+
+                    err
                 },
 
-                None => Err(NetworkError::NoElectedLeader),
+                None => {
+                    let err = Err(NetworkError::NoElectedLeader);
+                    debug!(network_id = self.id, "No elected leader.");
+                    err
+                },
             }
         )
     }
@@ -486,25 +522,47 @@ impl Network {
     }
 
     #[tracing::instrument(skip(self, command, ctx))]
-    fn handle_connect_to_remote_node(
+    fn handle_connect_remote_node(
         &mut self,
         command: ConnectNode,
         ctx: &mut Context<Self>
     ) -> impl ActorFuture<Actor = Self, Item = (), Error = NetworkError> {
-        fut::result(
-        match self.node_for_id(command.id) {
-                Some(node) => {
-                    debug!(network_id = self.id, "Node#{} exists - completing connection", command.id);
-                    node.do_send(command.clone());
-                    Ok(())
-                },
+        let task = match self.nodes.get(&command.id) {
+            Some(NodeRef { id: _, info: Some(current_info), addr: _} )
+            if &command.info == current_info => {
+                debug!(
+                    network_id = self.id, ?command,
+                    "no change to existing node connection - finalizing without change."
+                );
+                Ok(())
+            },
 
-                None => {
-                    debug!(network_id = self.id, "Node#{} does not exist - registering", command.id);
-                    self.register_node(command.id, &command.info, ctx.address())
-                },
-            }
-        )
+            Some(NodeRef { id: _, info: Some(current_info), addr: _} ) => {
+                info!(
+                    network_id = self.id, ?command,
+                    "node info changed - re-registering node."
+                );
+                self.register_node(command.id, &command.info, ctx.address())
+            },
+
+            None | Some(NodeRef { id: _, info: None, addr: _ }) => {
+                info!(
+                    network_id = self.id, ?command,
+                    "no info previous set - registering node."
+                );
+                self.register_node(command.id, &command.info, ctx.address())
+            },
+
+            // None | Some(NodeRef { id: _, info: None, addr: None }) => {
+            //     info!(
+            //         network_id = self.id, ?command,
+            //         "no node info or  previous set - registering node."
+            //     );
+            //     self.register_node(command.id, &command.info, ctx.address())
+            // },
+        };
+
+        fut::result(task)
     }
 
     #[tracing::instrument(skip(self, _ctx))]
@@ -521,15 +579,36 @@ impl Network {
         E: From<actix::MailboxError>,
         E: From<NetworkError>,
     {
-        debug!(network_id = self.id, ?command, "delegating command to leader...");
+        debug!(network_id = self.id, ?command, "lookup and delegate command to leader...");
 
         Box::new(
             self.leader_delegate()
-                .map_err(|err, _, _| err.into())
-                .and_then( move |leader, _, _| {
+                .map_err(|err, network, _| {
+                    error!(
+                        network_id = network.id, error = ?err,
+                        "error in determining leader"
+                    );
+                    err.into()
+                })
+                .and_then( move |leader, network, _| {
+                    info!(network_id = network.id, ?command, "Sending command to leader...");
+                    let command_desc = format!("{:?}", command);
+
                     fut::wrap_future::<_, Self>(leader.send(command))
-                        .map_err(|err, _, _| err.into())
-                        .and_then(|res, _, _| fut::result(res.into()))
+                        .map_err(|err, network, _| {
+                            error!(
+                                network_id = network.id, error = ?err,
+                                "command delegation to leader failed."
+                            );
+                            err.into()
+                        })
+                        .and_then(move |res, network, _| {
+                            debug!(
+                                network_id = network.id, command = ?command_desc,
+                                "command delegation to leader succeeded."
+                            );
+                            fut::result(res.into())
+                        })
                 })
         )
     }
@@ -543,18 +622,43 @@ impl Handler<ConnectNode> for Network {
         info!(network_id = self.id, "handling ConnectNode#{} command...", command.id);
 
         Box::new(
-            self.handle_connect_to_remote_node(command.clone(), ctx)
+            self.handle_connect_remote_node(command.clone(), ctx)
                 .and_then(move |_, network, ctx| {
-                    network.delegate_to_leader(command.clone(), ctx)
-                        .then(move |res,_ ,_| {
+                    let change_cluster_command = ChangeClusterConfig::new_to_add(vec!(command.id));
+
+                    network.delegate_to_leader(change_cluster_command, ctx)
+                        .then(move |res, network, _| {
                             fut::result(
                                 match res {
-                                    Ok(_) => res,
-                                    Err(NetworkError::NoElectedLeader) => Ok(ConnectionAcknowledged {}),
-                                    Err(NetworkError::NotLeader{leader_id: _, leader_address: _}) => {
+                                    Ok(_) => {
+                                        info!(
+                                            network_id = network.id, node_id = command.id,
+                                            "cluster config change handled by leader: {:?}", res
+                                        );
                                         Ok(ConnectionAcknowledged {})
                                     },
-                                    Err(_) => res,
+                                    Err(NetworkError::NoElectedLeader) => {
+                                        warn!(
+                                            network_id = network.id, node_id = command.id,
+                                            "no elected leader -- maybe ask to retry???"
+                                        );
+                                        Ok(ConnectionAcknowledged {})
+                                    },
+                                    Err(NetworkError::NotLeader{leader_id: _, leader_address: _}) => {
+                                        warn!(
+                                            network_id = network.id, node_id = command.id,
+                                            "Network is *not* elected leader -- retry???"
+                                        );
+                                        Ok(ConnectionAcknowledged {})
+                                    },
+                                    Err(err) => {
+                                        error!(
+                                            network_id = network.id, node_id = command.id,
+                                            error = ?err,
+                                            "failed to change config in leader -- retry???"
+                                        );
+                                        Err(err)
+                                    },
                                 }
                             )
                         })

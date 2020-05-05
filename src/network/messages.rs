@@ -198,10 +198,27 @@ pub struct ClusterMembershipChange {
     pub action: MembershipAction,
 }
 
-#[derive(Serialize, Deserialize, Message, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct ChangeClusterConfig {
-    pub to_add: Vec<NodeId>,
-    pub to_remove: Vec<NodeId>,
+    pub add_members: Vec<NodeId>,
+    pub remove_members: Vec<NodeId>,
 }
 
+impl ChangeClusterConfig {
+    pub fn new_to_add_remove(to_add: Vec<NodeId>, to_remove: Vec<NodeId>) -> Self {
+        Self { add_members: to_add, remove_members: to_remove, }
+    }
+
+    pub fn new_to_add(to_add: Vec<NodeId>) -> Self {
+        ChangeClusterConfig::new_to_add_remove(to_add, vec![])
+    }
+
+    pub fn new_to_remove(to_remove: Vec<NodeId>) -> Self {
+        ChangeClusterConfig::new_to_add_remove(vec![], to_remove)
+    }
+}
+
+impl Message for ChangeClusterConfig {
+    type Result = Result<(), NetworkError>;
+}

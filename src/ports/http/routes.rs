@@ -33,14 +33,14 @@ pub fn connect_node_route(
 
     info!("received register node request for node {:?}:{:?}", nid, body);
 
-    let register_node = ConnectNode {
+    let connect_cmd = ConnectNode {
         id: body.node_id.unwrap().into(),
         info: body.node_info.as_ref().unwrap().clone().into(),
     };
 
 
     srv.network
-        .send(register_node)
+        .send(connect_cmd)
         .map_err( Error::from)
         // .and_then(|res| {
         //     info!("join result = {:?}", res);
