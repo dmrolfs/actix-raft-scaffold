@@ -581,29 +581,49 @@ impl Network {
     {
         debug!(network_id = self.id, ?command, "lookup and delegate command to leader...");
 
+        let command_desc = format!("{:?}", command);
+        let command_desc_2 = command_desc.clone();
+
         Box::new(
             self.leader_delegate()
-                .map_err(|err, network, _| {
-                    error!(
-                        network_id = network.id, error = ?err,
-                        "error in determining leader"
-                    );
+                .map_err(move |err, network, _| {
+                    match err {
+                        NetworkError::NotLeader{leader_id: _, leader_address: _} => {
+                            warn!(
+                                network_id = network.id, command = ?command_desc_2, error = ?err,
+                                "Network is *not* elected leader -- retry???"
+                            );
+                        },
+
+                        NetworkError::NoElectedLeader => {
+                            warn!(
+                                network_id = network.id, command = ?command_desc_2, error = ?err,
+                                "No elected leader -- maybe ask to retry???"
+                            );
+                        },
+
+                        _ => {
+                            error!(
+                                network_id = network.id, command = ?command_desc_2, error = ?err,
+                                "failure while looking for leader -- maybe ask to retry???"
+                            );
+                        },
+                    };
                     err.into()
                 })
                 .and_then( move |leader, network, _| {
                     info!(network_id = network.id, ?command, "Sending command to leader...");
-                    let command_desc = format!("{:?}", command);
-
+                    let command_desc_2 = command_desc.clone();
                     fut::wrap_future::<_, Self>(leader.send(command))
-                        .map_err(|err, network, _| {
+                        .map_err(move |err, network, _| {
                             error!(
-                                network_id = network.id, error = ?err,
+                                network_id = network.id, command = ?command_desc_2, error = ?err,
                                 "command delegation to leader failed."
                             );
                             err.into()
                         })
                         .and_then(move |res, network, _| {
-                            debug!(
+                            info!(
                                 network_id = network.id, command = ?command_desc,
                                 "command delegation to leader succeeded."
                             );
@@ -630,35 +650,15 @@ impl Handler<ConnectNode> for Network {
                         .then(move |res, network, _| {
                             fut::result(
                                 match res {
-                                    Ok(_) => {
-                                        info!(
-                                            network_id = network.id, node_id = command.id,
-                                            "cluster config change handled by leader: {:?}", res
-                                        );
+                                    Ok(_) => Ok(ConnectionAcknowledged {}),
+                                    Err(NetworkError::NotLeader{leader_id: _, leader_address: _}) => {
+                                        //todo: finalize how to handle not leader
                                         Ok(ConnectionAcknowledged {})
                                     },
                                     Err(NetworkError::NoElectedLeader) => {
-                                        warn!(
-                                            network_id = network.id, node_id = command.id,
-                                            "no elected leader -- maybe ask to retry???"
-                                        );
                                         Ok(ConnectionAcknowledged {})
                                     },
-                                    Err(NetworkError::NotLeader{leader_id: _, leader_address: _}) => {
-                                        warn!(
-                                            network_id = network.id, node_id = command.id,
-                                            "Network is *not* elected leader -- retry???"
-                                        );
-                                        Ok(ConnectionAcknowledged {})
-                                    },
-                                    Err(err) => {
-                                        error!(
-                                            network_id = network.id, node_id = command.id,
-                                            error = ?err,
-                                            "failed to change config in leader -- retry???"
-                                        );
-                                        Err(err)
-                                    },
+                                    Err(err) => Err(err),
                                 }
                             )
                         })
