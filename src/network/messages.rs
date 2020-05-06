@@ -85,7 +85,7 @@ use http::status::StatusCode;
 impl actix_web::ResponseError for RaftProtocolError {
     fn error_response(&self) -> actix_http::Response<actix_web::body::Body> {
         match self {
-            RaftProtocolError::NodeNotLeader(id) => {
+            RaftProtocolError::NodeNotLeader(_id) => {
                 actix_http::Response::new(StatusCode::TEMPORARY_REDIRECT)
             },
 
@@ -174,7 +174,7 @@ pub struct ConnectionAcknowledged {}
 impl From<entities::ResponseResult> for ConnectionAcknowledged {
     fn from(that: entities::ResponseResult) -> Self {
         match that {
-            entities::ResponseResult::ConnectionAcknowledged {node_id} => {
+            entities::ResponseResult::ConnectionAcknowledged { node_id: _ } => {
                 Self {}
             },
 

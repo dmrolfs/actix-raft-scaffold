@@ -94,12 +94,22 @@ impl Network {
         ring: RingType,
         discovery: SocketAddr,
     ) -> Self {
+        let mut nodes = BTreeMap::new();
+        nodes.insert(
+            id,
+            NodeRef {
+                id,
+                info: Some(info.clone()),
+                addr: None,
+            }
+        );
+
         Network {
             id,
             info: info.clone(),
             state: NetworkState::default(),
             discovery,
-            nodes: BTreeMap::new(),
+            nodes,
             ring,
             metrics: None,
             server: None,
@@ -172,13 +182,9 @@ impl Network {
             };
             self.nodes.insert(node_id, node_ref);
         }
-        // let node_ref = self.nodes.get(&node_id)
-        //     .expect(format!("NodeRef assigned for {}", node_id).as_str());
-        //
-        // debug!(network_id = self.id, "Registering node {:?}...", &node_ref);
 
         match self.nodes.get_mut(&node_id) {
-            Some(NodeRef{id, info: Some(info), addr: Some(addr)}) if info == node_info => {
+            Some(NodeRef{id, info: Some(info), addr: Some(_)}) if info == node_info => {
                 info!(network_id = self.id, node_id = ?id, "node is current and connected - no further action.");
                 Ok(())
             },
@@ -197,25 +203,6 @@ impl Network {
                 Ok(())
             },
 
-            // Some(node_ref) => {
-            //     node_ref.info = Some(node_info.clone());
-            //     if node_ref.addr.is_none() {
-            //         info!(network_id = self.id, node_id = node_ref.id, "Starting node...");
-            //
-            //         let node = Node::new(
-            //             node_ref.id,
-            //             node_info.clone(),
-            //             self.id,
-            //             self.info.clone(),
-            //             self_addr,
-            //         );
-            //
-            //         node_ref.addr = Some(node.start());
-            //     }
-            //
-            //     Ok(())
-            // }
-            //
             None => {
                 let err_msg = format!("No node#{} registered in Network#{}.", node_id, self.id);
                 Err(NetworkError::Unknown(err_msg))
@@ -327,7 +314,7 @@ impl Message for GetNode {
 impl Handler<GetNode> for Network {
     type Result = Result<(NodeId, Option<NodeInfo>), NetworkError>;
 
-    fn handle(&mut self, msg: GetNode, ctx: &mut Self::Context) -> Self::Result {
+    fn handle(&mut self, msg: GetNode, _ctx: &mut Self::Context) -> Self::Result {
         let node_id = msg.node_id
             .unwrap_or_else( || {
                 let ring = self.ring.read().unwrap();
@@ -449,7 +436,6 @@ impl Network {
     /// NotLeader error referencing the leader or notice there is no elected leader.
     #[tracing::instrument(skip(self))]
     fn leader_delegate(&self) -> impl ActorFuture<Actor = Self, Item = Addr<Node>, Error = NetworkError> {
-        let leader = self.leader_ref();
         fut::result(
             match self.leader_ref() {
                 Some(NodeRef{ id, info: _, addr}) if id == &self.id && addr.is_some() => {
@@ -544,7 +530,7 @@ impl Network {
                 Ok(())
             },
 
-            Some(NodeRef { id: _, info: Some(current_info), addr: _} ) => {
+            Some(NodeRef { id: _, info: Some(_), addr: _} ) => {
                 info!(
                     network_id = self.id, ?command,
                     "node info changed - re-registering node."
@@ -654,7 +640,7 @@ impl Handler<ConnectNode> for Network {
                     let change_cluster_command = ChangeClusterConfig::new_to_add(vec!(command.id));
 
                     network.delegate_to_leader(change_cluster_command, ctx)
-                        .then(move |res, network, _| {
+                        .then(move |res, _, _| {
                             fut::result(
                                 match res {
                                     Ok(_) => Ok(ConnectionAcknowledged {}),

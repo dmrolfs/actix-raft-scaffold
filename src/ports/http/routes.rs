@@ -198,7 +198,7 @@ pub fn raft_protocol_route(
 
     route_raft_command(command)
         .map_err(|err| Error::from(err))
-        .map(|resp| { entities::raft_protocol_command_response::Response::Result(
+        .map(|_| { entities::raft_protocol_command_response::Response::Result(
             entities::ResponseResult::ConnectionAcknowledged { node_id: None }
         )})
         .map(|resp| HttpResponse::Ok().json(resp) )

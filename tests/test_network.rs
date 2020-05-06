@@ -1,7 +1,6 @@
 mod fixtures;
 
 use std::net::SocketAddr;
-use std::rc::Rc;
 use std::collections::HashMap;
 use actix::spawn;
 use std::collections::BTreeMap;
@@ -139,7 +138,9 @@ fn test_network_create() {
         actual.discovery,
         "127.0.0.1:8888".parse::<SocketAddr>().unwrap()
     );
-    assert_eq!(actual.nodes.is_empty(), true);
+    assert_eq!(actual.nodes.is_empty(), false);
+    assert_eq!(actual.nodes.len(), 1);
+    assert_eq!(actual.nodes.get(&actual.id).unwrap().info.as_ref().unwrap(), &actual.info);
     assert_eq!(actual.state.connected_nodes().is_empty(), true);
     assert_eq!(actual.state.isolated_nodes().is_empty(), true);
     assert_eq!(actual.metrics.is_none(), true);
@@ -387,10 +388,7 @@ struct ConnectNodePrep {
 fn create_and_bind_network() -> (ConnectNodePrep, impl Future<Item = ClusterSummary, Error = NetworkError>) {
     let node_a = make_node_a("[::1]:8888".parse().unwrap());
     let node_a_1 = node_a.clone();
-    let node_a_2 = node_a.clone();
     let node_b = make_node_b(server_address());
-    let node_b_1 = node_b.clone();
-    // let node_b = make_node_b("[::1]:8080".parse().unwrap());
     let config = make_test_configuration("node_a", vec![&node_a, &node_b]);
 
     let node_b_id = crate::utils::generate_node_id(node_b.cluster_address.clone());
@@ -401,8 +399,6 @@ fn create_and_bind_network() -> (ConnectNodePrep, impl Future<Item = ClusterSumm
     network.configure_with(&config);
     let network_addr = network.start();
     let n1 = network_addr.clone();
-    let n2 = network_addr.clone();
-    let n3 = network_addr.clone();
 
     let fib_act = FibActor::new();
     let fib_addr = fib_act.start();
@@ -508,10 +504,10 @@ fn test_cmd_connect_node_no_leader() {
 
     let network_1 = prep.network.clone();
     let network_2 = prep.network.clone();
-    let task = prep_task.and_then(move |summary| {
+    let task = prep_task.and_then(move |_summary| {
         network_1.send(ConnectNode{id: node_b_id, info: node_b_info.clone()}).from_err()
     })
-        .and_then(move |ack| {
+        .and_then(move |_ack| {
             network_2.send(GetClusterSummary).from_err()
         })
         // .from_err()
@@ -587,11 +583,11 @@ fn test_cmd_connect_node_change_info() {
     changed_node_b.name = "new-node-b".to_string();
     let changed_node_b_expected = changed_node_b.clone();
 
-    let task = prep_task.and_then(move |summary| {
+    let task = prep_task.and_then(move |_summary| {
         // change node_b info on connect
         network_1.send(ConnectNode{id: node_b_id, info: changed_node_b}).from_err()
     })
-        .and_then(move |ack| {
+        .and_then(move |_ack| {
             network_2.send(GetClusterSummary).from_err()
         })
         .and_then(move |summary| {
@@ -672,7 +668,7 @@ fn test_cmd_connect_node_leader() {
     let network_3 = prep.network.clone();
     let prep_1 = prep.clone();
 
-    let task = prep_task.and_then(move |summary| {
+    let task = prep_task.and_then(move |_summary| {
         let members = prep_1.members.keys().map(|k| *k).collect();
 
         let change_leader = RaftMetrics {
@@ -693,10 +689,10 @@ fn test_cmd_connect_node_leader() {
         info!("send change in leader to network...");
         network_1.send(change_leader).from_err()
     })
-        .and_then(move |summary| {
+        .and_then(move |_summary| {
             network_2.send(ConnectNode{id: node_b_id, info: node_b_info}).from_err()
         })
-        .and_then(move |ack| {
+        .and_then(move |_ack| {
             network_3.send(GetClusterSummary).from_err()
         })
         .and_then(move |summary| {

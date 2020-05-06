@@ -121,12 +121,12 @@ impl Debug for RemoteNode {
 impl ProximityBehavior for RemoteNode {}
 
 impl ChangeClusterBehavior for RemoteNode {
-    #[tracing::instrument(skip(ctx))]
+    #[tracing::instrument(skip(_ctx))]
     fn change_cluster_config(
         &self,
         add_members: Vec<NodeId>,
         remove_members: Vec<NodeId>,
-        ctx: &<Node as Actor>::Context
+        _ctx: &<Node as Actor>::Context
     ) -> Result<(), NodeError> {
         let command = entities::RaftProtocolCommand::ProposeConfigChange {
             add_members: add_members.iter().map(|m| (*m).into()).collect(),
@@ -153,7 +153,7 @@ impl ChangeClusterBehavior for RemoteNode {
             .and_then(|cresp| {
                 if let Some(response) = cresp.response {
                     match response {
-                        entities_response::Response::Result(r) => Ok(()),
+                        entities_response::Response::Result(_) => Ok(()),
 
                         entities_response::Response::Failure(f) => {
                             Err(NodeError::ResponseFailure(f.description))
