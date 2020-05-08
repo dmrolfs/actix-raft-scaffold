@@ -1,7 +1,7 @@
 use std::fmt::Debug;
 use std::time::Duration;
 use actix::prelude::*;
-use actix_raft::NodeId;
+use actix_raft::{NodeId, AppData};
 use thiserror::Error;
 use tracing::*;
 use strum_macros::{Display as StrumDisplay};
@@ -57,14 +57,14 @@ pub enum NodeError {
 }
 
 #[derive(Clone)]
-pub struct NodeRef {
+pub struct NodeRef<D: AppData> {
     pub id: NodeId,
     //todo log when cluster config beats join
     pub info: Option<NodeInfo>, // option for the case where cluster config change beats join; log when this occurs
-    pub addr: Option<Addr<Node>>,
+    pub addr: Option<Addr<Node<D>>>,
 }
 
-impl Debug for NodeRef {
+impl<D: AppData> Debug for NodeRef<D> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "NodeRef(id:{}, info:{:?}, started:{})", self.id, self.info, self.addr.is_some())
     }
@@ -91,17 +91,17 @@ impl NodeStatus {
     pub fn is_disconnected(&self) -> bool { !self.is_connected() }
 }
 
-pub struct Node {
-    id: NodeId, // id of the node (remote or local)
-    local_id: NodeId, // id local to the machine of the node this instance exists
-    proximity: Box<dyn ProximityBehavior>,
-    status: NodeStatus,
-    local_info: NodeInfo,
+pub struct Node<D: AppData> {
+    pub id: NodeId, // id of the node (remote or local)
+    pub local_id: NodeId, // id local to the machine of the node this instance exists
+    pub proximity: Box<dyn ProximityBehavior<D>>,
+    pub status: NodeStatus,
+    pub local_info: NodeInfo,
     // heartbeat_interval: Option<Duration>,
-    network: Addr<Network>,
+    pub network: Addr<Network<D>>,
 }
 
-impl Node {
+impl<D: AppData> Node<D> {
     #[tracing::instrument]
     pub fn new(
         id: NodeId,
@@ -109,7 +109,7 @@ impl Node {
         local_id: NodeId,
         local_info: NodeInfo,
         // heartbeat_interval: Duration,
-        network: Addr<Network>,
+        network: Addr<Network<D>>,
     ) -> Self {
         let proximity = Node::determine_proximity(local_id, id, &info);
 
@@ -131,7 +131,7 @@ impl Node {
         local_id: NodeId,
         node_id: NodeId,
         node_info: &NodeInfo
-    ) -> Box<dyn ProximityBehavior> {
+    ) -> Box<dyn ProximityBehavior<D>> {
         if node_id == local_id {
             Box::new(LocalNode::new(local_id))
         } else {
@@ -180,7 +180,7 @@ impl Node {
     // }
 }
 
-impl Debug for Node {
+impl<D: AppData> Debug for Node<D> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -190,7 +190,7 @@ impl Debug for Node {
     }
 }
 
-impl Actor for Node {
+impl<D: AppData> Actor for Node<D> {
     type Context = Context<Self>;
 
     #[tracing::instrument(skip(self, ctx))]
@@ -214,7 +214,7 @@ impl Message for Connect {
     // type Result = Result<(), NodeError>;
 }
 
-impl Handler<Connect> for Node {
+impl<D: AppData> Handler<Connect> for Node<D> {
     type Result = ();
     // type Result = ResponseActFuture<Self, (), NodeError>;
 
@@ -234,20 +234,18 @@ impl Handler<Connect> for Node {
     }
 }
 
-impl Node {
+impl<D: AppData> Node<D> {
     #[tracing::instrument(skip(self, ack, _ctx))]
     fn handle_connect_result(
         &mut self,
         ack: ConnectionAcknowledged,
-        _ctx: &mut <Node as Actor>::Context
+        _ctx: &mut <Node<D> as Actor>::Context
     ) -> impl ActorFuture<Actor=Self, Item=(), Error=()> {
         info!(local_id = self.local_id, node_id = self.id, "connection made to node: {:?}", ack);
         self.apply_status_change(NodeStatus::Connected);
         fut::ok(())
     }
-}
 
-impl Node {
     #[tracing::instrument(skip(self, ctx))]
     fn connect(
         &mut self,
@@ -306,8 +304,6 @@ impl Node {
 }
 
 
-
-
 #[derive(Debug)]
 pub struct Disconnect;
 
@@ -315,7 +311,7 @@ impl Message for Disconnect {
     type Result = Result<(), NodeError>;
 }
 
-impl Handler<Disconnect> for Node {
+impl<D: AppData> Handler<Disconnect> for Node<D> {
     type Result = ResponseActFuture<Self, (), NodeError>;
 
     #[tracing::instrument(skip(self, ctx))]
@@ -324,9 +320,9 @@ impl Handler<Disconnect> for Node {
     }
 }
 
-impl Node {
+impl<D: AppData> Node<D> {
     #[tracing::instrument(skip(self, ctx))]
-    fn disconnect(&mut self, ctx: &mut <Node as Actor>::Context) {
+    fn disconnect(&mut self, ctx: &mut <Node<D> as Actor>::Context) {
         if self.status.is_connected() == true {
             info!(
                 local_id = self.local_id, node_id = self.id, proximity = ?self.proximity,
@@ -360,7 +356,7 @@ impl Node {
     }
 }
 
-impl Handler<ChangeClusterConfig> for Node {
+impl<D: AppData> Handler<ChangeClusterConfig> for Node<D> {
     type Result = Result<(), NetworkError>;
 
     #[tracing::instrument(skip(self, ctx))]
@@ -371,15 +367,15 @@ impl Handler<ChangeClusterConfig> for Node {
     }
 }
 
-impl Node {
+impl<D: AppData> Node<D> {
     #[tracing::instrument]
-    fn join_node(&self, node_id: NodeId, ctx: &<Node as Actor>::Context) -> Result<(), NodeError>{
+    fn join_node(&self, node_id: NodeId, ctx: &<Node<D> as Actor>::Context) -> Result<(), NodeError>{
         self.proximity
             .change_cluster_config(vec![node_id], vec![], ctx)
     }
 }
 
-impl Handler<ConnectNode> for Node {
+impl<D: AppData> Handler<ConnectNode> for Node<D> {
     type Result = ResponseActFuture<Self, ConnectionAcknowledged, NetworkError>;
 
     #[tracing::instrument(skip(self, ctx))]

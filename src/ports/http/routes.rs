@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use futures::{Future, future};
 use actix_web::{web, Error, HttpRequest, HttpResponse};
+use actix_raft::AppData;
 use tracing::*;
 use crate::ports::PortData;
 use super::entities;
@@ -15,11 +16,11 @@ fn node_id_from_path( req: &HttpRequest ) -> Result<u64, std::num::ParseIntError
 }
 
 // NodeInfoMessage > ChangeClusterMembershipResponse
-pub fn connect_node_route(
+pub fn connect_node_route<D: AppData>(
     body: web::Json<entities::NodeInfoMessage>,
     req: HttpRequest,
     _stream: web::Payload,
-    srv: web::Data<Arc<PortData>>,
+    srv: web::Data<Arc<PortData<D>>>,
 ) -> impl Future<Item = HttpResponse, Error = Error> {
     //todo
     let nid = node_id_from_path(&req).expect("valid numerical node id");
@@ -69,10 +70,10 @@ pub fn connect_node_route(
 }
 
 // NodeIdMessage > ChangeClusterMembershipResponse
-pub fn disconnect_node_route(
+pub fn disconnect_node_route<D: AppData>(
     req: HttpRequest,
     _stream: web::Payload,
-    _srv: web::Data<Arc<PortData>>,
+    _srv: web::Data<Arc<PortData<D>>>,
 ) -> impl Future<Item = HttpResponse, Error = Error> {
     //todo
     let nid = node_id_from_path(&req).expect("valid numerical node id");
@@ -81,10 +82,10 @@ pub fn disconnect_node_route(
 }
 
 // NodeIdMessage > NodeInfoMessage
-pub fn node_route(
+pub fn node_route<D: AppData>(
     req: HttpRequest,
     _stream: web::Payload,
-    _srv: web::Data<Arc<PortData>>,
+    _srv: web::Data<Arc<PortData<D>>>,
 ) -> impl Future<Item = HttpResponse, Error = Error> {
     //todo
     let nid = node_id_from_path(&req).expect("valid numerical node id");
@@ -102,10 +103,10 @@ pub fn node_route(
 }
 
 // ClusterNodesRequest > ClusterNodesResponse
-pub fn all_nodes_route(
+pub fn all_nodes_route<D: AppData>(
     _req: HttpRequest,
     _stream: web::Payload,
-    _srv: web::Data<Arc<PortData>>,
+    _srv: web::Data<Arc<PortData<D>>>,
 ) -> impl Future<Item = HttpResponse, Error = Error> {
     // srv.network
     //     .send(GetNodes)
@@ -122,10 +123,10 @@ pub fn all_nodes_route(
 
 // ClusterStateRequest > ClusterStateResponse
 #[tracing::instrument(skip(_stream, srv))]
-pub fn state_route(
+pub fn state_route<D: AppData>(
     _req: HttpRequest,
     _stream: web::Payload,
-    srv: web::Data<Arc<PortData>>,
+    srv: web::Data<Arc<PortData<D>>>,
 ) -> impl Future<Item = HttpResponse, Error = Error> {
     srv.network
         .send(GetClusterSummary)
@@ -138,40 +139,40 @@ pub fn state_route(
         })
 
 
-            // Ok(HttpResponse::Ok().json(res)))
+    // Ok(HttpResponse::Ok().json(res)))
     // //todo
     // info!("get cluster state");
     // future::ok(HttpResponse::Ok().json(()))
 }
 
 // AppendEntries: RaftAppendEntriesRequest > RaftAppendEntriesResponse
-pub fn append_entries_route(
+pub fn append_entries_route<D: AppData>(
     _body: web::Json<entities::RaftAppendEntriesRequest>,
     _req: HttpRequest,
     _stream: web::Payload,
-    _srv: web::Data<Arc<PortData>>,
+    _srv: web::Data<Arc<PortData<D>>>,
 ) ->  impl Future<Item = HttpResponse, Error = Error> {
     info!("RAFT append entries");
     future::ok( HttpResponse::Ok().json(()))
 }
 
 // InstallSnaphot: RaftInstallSnapshotRequest > RaftInstallSnapshotResponse
-pub fn install_snapshot_route(
+pub fn install_snapshot_route<D: AppData>(
     _body: web::Json<entities::RaftInstallSnapshotRequest>,
     _req: HttpRequest,
     _stream: web::Payload,
-    _srv: web::Data<Arc<PortData>>,
+    _srv: web::Data<Arc<PortData<D>>>,
 ) ->  impl Future<Item = HttpResponse, Error = Error> {
     info!("RAFT install snapshot");
     future::ok( HttpResponse::Ok().json(()))
 }
 
 // Vote: RaftVoteRequest > RaftVoteResponse
-pub fn vote_route(
+pub fn vote_route<D: AppData>(
     body: web::Json<entities::RaftVoteRequest>,
     _req: HttpRequest,
     _stream: web::Payload,
-    _srv: web::Data<Arc<PortData>>,
+    _srv: web::Data<Arc<PortData<D>>>,
 ) ->  impl Future<Item = HttpResponse, Error = Error> {
     info!("RAFT vote");
 
@@ -187,11 +188,11 @@ pub fn vote_route(
 }
 
 #[tracing::instrument(skip(_stream, _src))]
-pub fn raft_protocol_route(
+pub fn raft_protocol_route<D: AppData>(
     body: web::Json<entities::RaftProtocolCommand>,
     _req: HttpRequest,
     _stream: web::Payload,
-    _src: web::Data<Arc<PortData>>,
+    _src: web::Data<Arc<PortData<D>>>,
 ) -> impl Future<Item = HttpResponse, Error = Error> {
     let command = body.into_inner();
     info!("RAFT protocol:{:?}", command);
@@ -224,4 +225,3 @@ fn handle_raft_propose_config_change(
     info!("");
     future::ok(())
 }
-

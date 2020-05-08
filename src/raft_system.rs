@@ -1,5 +1,5 @@
 use actix::prelude::*;
-use actix_raft::NodeId;
+use actix_raft::{NodeId, AppData};
 use thiserror::Error;
 use tracing::*;
 use crate::{
@@ -25,15 +25,15 @@ pub enum RaftSystemError {
     Unknown,
 }
 
-pub struct RaftSystem {
+pub struct RaftSystem<D: AppData> {
     pub id: NodeId,
     // pub raft: Addr<RaftClient>,
-    pub network: Addr<Network>,
+    pub network: Addr<Network<D>>,
     configuration: Configuration,
     info: NodeInfo,
 }
 
-impl std::fmt::Debug for RaftSystem {
+impl<D: AppData> std::fmt::Debug for RaftSystem<D> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -43,9 +43,9 @@ impl std::fmt::Debug for RaftSystem {
     }
 }
 
-impl RaftSystem {
+impl<D: AppData> RaftSystem<D> {
     #[tracing::instrument]
-    pub fn new() -> Result<RaftSystem,  RaftSystemError> {
+    pub fn new() -> Result<RaftSystem<D>,  RaftSystemError> {
         let config = Configuration::load()?;
         info!("configuration = {:?}", config);
         // let config = match Configuration::load() {
@@ -83,7 +83,7 @@ impl RaftSystem {
 
     #[tracing::instrument]
     // pub fn start(&self) -> Result<(), RaftSystemError> {
-    pub fn start(&self, data: PortData) -> Result<(), RaftSystemError> {
+    pub fn start(&self, data: PortData<D>) -> Result<(), RaftSystemError> {
         self.network
             .send( BindEndpoint::new(data))
             .map(|res| res.unwrap() )

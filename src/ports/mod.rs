@@ -1,4 +1,5 @@
 use actix::prelude::*;
+use actix_raft::AppData;
 use thiserror::Error;
 use crate::network::Network;
 use super::fib::FibActor;
@@ -15,11 +16,11 @@ pub enum PortError {
 }
 
 #[derive(Clone)]
-pub struct PortData {
+pub struct PortData<D: AppData> {
     pub fib: Addr<FibActor>,
-    pub network: Addr<Network>,
+    pub network: Addr<Network<D>>,
 }
 
-impl std::fmt::Debug for PortData {
+impl<D: AppData> std::fmt::Debug for PortData<D> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "AppPortData") }
 }

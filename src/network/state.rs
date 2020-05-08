@@ -114,7 +114,15 @@ impl NetworkState {
 
     pub fn connected_nodes(&self) -> &HashSet<NodeId> { &self.connected_nodes }
 
+    pub fn is_connected_node(&self, node_id: NodeId) -> bool {
+        self.connected_nodes.contains(&node_id)
+    }
+
     pub fn isolated_nodes(&self) -> &HashSet<NodeId> { &self.isolated_nodes }
+
+    pub fn is_isolated_node(&self, node_id: NodeId) -> bool {
+        self.isolated_nodes.contains(&node_id)
+    }
 
     pub fn extent(&self) -> Extent {
         if 1 < self.connected_nodes.len() {

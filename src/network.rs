@@ -1,10 +1,12 @@
 use std::collections::BTreeMap;
+use std::marker::PhantomData;
 use std::net::SocketAddr;
 use std::time::{Instant, Duration};
 use actix::prelude::*;
 use actix_server::Server;
 use actix_raft::{
     NodeId,
+    AppData,
     metrics::RaftMetrics,
 };
 use tokio::timer::Delay;
@@ -56,18 +58,19 @@ pub mod summary;
 //     }
 // }
 
-pub struct Network {
+pub struct Network<D: AppData> {
     pub id: NodeId,
     pub info: NodeInfo,
     pub state: NetworkState,
     pub discovery: SocketAddr,
-    pub nodes: BTreeMap<NodeId, NodeRef>,
+    pub nodes: BTreeMap<NodeId, NodeRef<D>>,
     pub ring: RingType,
     pub metrics: Option<RaftMetrics>,
     pub server: Option<Server>,
+    marker_data: PhantomData<D>,
 }
 
-impl std::fmt::Debug for Network {
+impl<D: AppData> std::fmt::Debug for Network<D> {
     fn fmt(&self, f:&mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -81,13 +84,13 @@ impl std::fmt::Debug for Network {
     }
 }
 
-impl std::fmt::Display for Network {
+impl<D: AppData> std::fmt::Display for Network<D> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Network(id:{} state:{})", self.id, self.state,)
     }
 }
 
-impl Network {
+impl<D: AppData> Network<D> {
     pub fn new(
         id: NodeId,
         info: &NodeInfo,
@@ -113,6 +116,7 @@ impl Network {
             ring,
             metrics: None,
             server: None,
+            marker_data: std::marker::PhantomData,
         }
     }
 
@@ -147,14 +151,18 @@ impl Network {
         }
     }
 
-    fn is_leader(&self) -> bool {
+    pub fn get_node(&self, id: NodeId) -> Option<Addr<Node<D>>> {
+        self.nodes.get(&id).map(|node_ref| node_ref.addr.clone()).flatten()
+    }
+
+    pub fn is_leader(&self) -> bool {
         match self.metrics.as_ref().map(|m| m.current_leader) {
             Some(Some(leader_id)) => self.id == leader_id,
             _ => false
         }
     }
 
-    fn leader_ref(&self) -> Option<&NodeRef> {
+    pub fn leader_ref(&self) -> Option<&NodeRef<D>> {
         //todo: ?leave with RaftMetrics or query LocalNode's RAFT state?
         self.metrics
             .as_ref()
@@ -223,7 +231,7 @@ impl Network {
     fn restore_node(&mut self, id: NodeId) { self.state.restore_node(id); }
 }
 
-impl Actor for Network {
+impl<D: AppData> Actor for Network<D> {
     type Context = Context<Self>;
 
     #[tracing::instrument(skip(self, ctx))]
@@ -240,7 +248,7 @@ impl Actor for Network {
     }
 }
 
-impl Handler<RaftMetrics> for Network {
+impl<D: AppData> Handler<RaftMetrics> for Network<D> {
     type Result = ();
 
     #[tracing::instrument(skip(self, _ctx))]
@@ -259,24 +267,24 @@ impl Handler<RaftMetrics> for Network {
 }
 
 #[derive(Debug, Clone)]
-pub struct BindEndpoint {
-    data: PortData
+pub struct BindEndpoint<D: AppData> {
+    data: PortData<D>
 }
 
-impl BindEndpoint {
-    pub fn new(data: PortData) -> Self { BindEndpoint { data } }
+impl<D: AppData> BindEndpoint<D> {
+    pub fn new(data: PortData<D>) -> Self { BindEndpoint { data } }
 }
 
-impl Message for BindEndpoint {
+impl<D: AppData> Message for BindEndpoint<D> {
     type Result = Result<(), NetworkError>;
 }
 
-impl Handler<BindEndpoint> for Network {
+impl<D: AppData> Handler<BindEndpoint<D>> for Network<D> {
     type Result = Result<(), NetworkError>;
     // type Result = ResponseActFuture<Self, (), NetworkError>;
 
     #[tracing::instrument(skip(self, _ctx))]
-    fn handle(&mut self, bind: BindEndpoint, _ctx: &mut Self::Context) -> Self::Result {
+    fn handle(&mut self, bind: BindEndpoint<D>, _ctx: &mut Self::Context) -> Self::Result {
         info!(
             network_id = self.id,
             endpoint_address = self.info.cluster_address.as_str(),
@@ -311,7 +319,7 @@ impl Message for GetNode {
     type Result = Result<(NodeId, Option<NodeInfo>), NetworkError>;
 }
 
-impl Handler<GetNode> for Network {
+impl<D: AppData> Handler<GetNode> for Network<D> {
     type Result = Result<(NodeId, Option<NodeInfo>), NetworkError>;
 
     fn handle(&mut self, msg: GetNode, _ctx: &mut Self::Context) -> Self::Result {
@@ -380,7 +388,7 @@ impl Message for GetCurrentLeader {
     type Result = Result<CurrentLeader, NetworkError>;
 }
 
-impl Handler<GetCurrentLeader> for Network {
+impl<D: AppData> Handler<GetCurrentLeader> for Network<D> {
     type Result = ResponseActFuture<Self, CurrentLeader, NetworkError>;
 
     #[tracing::instrument(skip(self,_ctx))]
@@ -422,7 +430,7 @@ impl Message for GetClusterSummary {
     type Result = Result<ClusterSummary, NetworkError>;
 }
 
-impl Handler<GetClusterSummary> for Network {
+impl<D: AppData> Handler<GetClusterSummary> for Network<D> {
     type Result = Result<ClusterSummary, NetworkError>;
 
     #[tracing::instrument]
@@ -431,11 +439,11 @@ impl Handler<GetClusterSummary> for Network {
     }
 }
 
-impl Network {
+impl<D: AppData> Network<D> {
     /// Returns the Addr<Node> if this network is the leader; otherwise if there is consensus, a
     /// NotLeader error referencing the leader or notice there is no elected leader.
     #[tracing::instrument(skip(self))]
-    fn leader_delegate(&self) -> impl ActorFuture<Actor = Self, Item = Addr<Node>, Error = NetworkError> {
+    fn leader_delegate(&self) -> impl ActorFuture<Actor = Self, Item = Addr<Node<D>>, Error = NetworkError> {
         fut::result(
             match self.leader_ref() {
                 Some(NodeRef{ id, info: _, addr}) if id == &self.id && addr.is_some() => {
@@ -475,7 +483,7 @@ impl Network {
     }
 }
 
-impl Handler<HandleNodeStatusChange> for Network {
+impl<D: AppData> Handler<HandleNodeStatusChange> for Network<D> {
     type Result = ();
 
     #[tracing::instrument(skip(self, _ctx))]
@@ -503,17 +511,11 @@ impl Handler<HandleNodeStatusChange> for Network {
                     self.isolate_node(msg.id);
                 },
             };
-
-
         }
     }
 }
 
-impl Network {
-    fn node_for_id(&self, id: NodeId) -> Option<Addr<Node>> {
-        self.nodes.get(&id).map(|node_ref| node_ref.addr.clone()).flatten()
-    }
-
+impl<D: AppData> Network<D> {
     #[tracing::instrument(skip(self, command, ctx))]
     fn handle_connect_remote_node(
         &mut self,
@@ -568,7 +570,7 @@ impl Network {
         M: Message + std::fmt::Debug + Send + 'static,
         M::Result: Into<Result<I, E>>,
         M::Result: Send,
-        Node: Handler<M>,
+        Node<D>: Actor<Context = Context<Node<D>>> + Handler<M>,
         E: From<actix::MailboxError>,
         E: From<NetworkError>,
     {
@@ -607,6 +609,7 @@ impl Network {
                 .and_then( move |leader, network, _| {
                     info!(network_id = network.id, ?command, "Sending command to leader...");
                     let command_desc_2 = command_desc.clone();
+
                     fut::wrap_future::<_, Self>(leader.send(command))
                         .map_err(move |err, network, _| {
                             error!(
@@ -627,7 +630,7 @@ impl Network {
     }
 }
 
-impl Handler<ConnectNode> for Network {
+impl<D: AppData> Handler<ConnectNode> for Network<D> {
     type Result = ResponseActFuture<Self, ConnectionAcknowledged, NetworkError>;
 
     #[tracing::instrument(skip(self, ctx))]

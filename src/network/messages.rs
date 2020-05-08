@@ -152,10 +152,14 @@ impl Into<entities::raft_protocol_command_response::Response> for RaftProtocolEr
     }
 }
 
-#[derive(Message, Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HandleNodeStatusChange {
     pub id: NodeId,
     pub status: NodeStatus,
+}
+
+impl Message for HandleNodeStatusChange {
+    type Result = ();
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

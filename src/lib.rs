@@ -12,6 +12,7 @@ pub mod raft_system;
 pub mod fib;
 pub mod ports;
 pub mod network;
+pub mod raft;
 pub mod ring; //todo move into private and support tailoring via configuration
 
 pub use self::config::{Configuration, ConfigurationError, JoinStrategy};

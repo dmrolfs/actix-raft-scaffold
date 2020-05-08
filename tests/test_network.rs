@@ -21,6 +21,7 @@ use actix_raft_scaffold::config::Configuration;
 use actix_raft_scaffold::fib::FibActor;
 use actix_raft_scaffold::ports::{PortData, http::entities};
 use actix_raft_scaffold::network::summary::ClusterSummary;
+use crate::fixtures::memory_storage::Data;
 
 
 const NODE_A_ADDRESS: &str = "127.0.0.1:8000";
@@ -91,7 +92,7 @@ fn make_expected_nodes() -> BTreeMap<NodeId, NodeInfo> {
     expected_nodes
 }
 
-fn make_test_network(node_info: &NodeInfo) -> Network {
+fn make_test_network(node_info: &NodeInfo) -> Network<Data> {
     let node_id = utils::generate_node_id(node_info.cluster_address.as_str());
     let ring = Ring::new(10);
     let discovery = "127.0.0.1:8888".parse::<SocketAddr>().unwrap();
@@ -379,7 +380,7 @@ fn test_network_bind() {
 
 #[derive(Clone)]
 struct ConnectNodePrep {
-    pub network: Addr<Network>,
+    pub network: Addr<Network<Data>>,
     pub network_id: NodeId,
     pub members: HashMap<NodeId, NodeInfo>,
 }
