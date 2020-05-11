@@ -1,12 +1,16 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::time::{Duration as StdDuration};
+use chrono::Duration;
 use serde::Deserialize;
 use structopt::StructOpt;
 use thiserror::Error;
 use tracing::*;
 use ::config::Config;
 use crate::{NodeInfo, NodeList};
+use actix_raft::SnapshotPolicy;
+use std::option::NoneError;
 
 #[derive(Error, Debug)]
 pub enum ConfigurationError {
@@ -16,9 +20,17 @@ pub enum ConfigurationError {
     #[error("application misconfigured")]
     ConfigSource(#[from] config::ConfigError),
 
-    #[error("unknown configuration error")]
-    Unknown,
+    #[error("Configuration was net set before building: {0:?}")]
+    NoConfiguration(std::option::NoneError),
+
+    #[error("unknown configuration error: {0}")]
+    Unknown(String),
 }
+
+impl From<std::option::NoneError> for ConfigurationError {
+    fn from(that: std::option::NoneError) -> Self { Self::NoConfiguration(that) }
+}
+
 
 #[derive(StructOpt, Debug)]
 #[structopt(name="actix-raft-seed")]
@@ -39,11 +51,20 @@ pub enum JoinStrategy {
 }
 
 #[derive(Deserialize, Debug, Clone)]
-pub struct ConfigSchema {
+struct ConfigSchema {
     pub discovery_host_address: String,
     pub join_strategy: JoinStrategy,
     pub ring_replicas: isize,
-    pub nodes: NodeList
+    pub nodes: NodeList,
+    pub max_discovery_timeout: i64,
+    pub max_raft_init_timeout: i64,
+    pub election_timeout_min: i64,
+    pub election_timeout_max: i64,
+    pub heartbeat_interval: i64,
+    pub max_payload_entries: usize,
+    pub metrics_rate: i64,
+    pub snapshot_dir: PathBuf,
+    pub snapshot_max_chunk_size: u64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -52,12 +73,22 @@ pub struct Configuration {
     pub discovery_host: SocketAddr,
     pub join_strategy: JoinStrategy,
     pub ring_replicas: isize,
-    pub nodes: HashMap<String, NodeInfo>,
+    pub seed_nodes: HashMap<String, NodeInfo>,
+    pub max_discovery_timeout: Duration,
+    pub max_raft_init_timeout: Duration,
+    pub election_timeout_min: Duration,
+    pub election_timeout_max: Duration,
+    pub heartbeat_interval: Duration,
+    pub max_payload_entries: usize,
+    pub metrics_rate: Duration,
+    pub snapshot_policy: SnapshotPolicy,
+    pub snapshot_dir: PathBuf,
+    pub snapshot_max_chunk_size: u64,
 }
 
 impl Configuration {
     pub fn host_info(&self) -> NodeInfo {
-        self.nodes
+        self.seed_nodes
             .get(&self.host)
             .expect("host node not configured")
             .clone()
@@ -72,7 +103,7 @@ impl From<ConfigSchema> for Configuration {
         let discovery = schema.discovery_host_address.parse::<SocketAddr>()
             .expect("failed to parse discovery host socket address");
 
-        let nodes = schema.nodes.iter()
+        let seed_nodes = schema.nodes.iter()
             .map(|n| (n.name.clone(), n.clone()))
             .into_iter()
             .collect();
@@ -82,7 +113,17 @@ impl From<ConfigSchema> for Configuration {
             discovery_host: discovery,
             join_strategy: schema.join_strategy,
             ring_replicas: schema.ring_replicas,
-            nodes,
+            seed_nodes,
+            max_discovery_timeout: Duration::seconds(schema.max_raft_init_timeout),   //   Duration::from_std(schema.max_discovery_timeout).unwrap(),
+            max_raft_init_timeout: Duration::seconds(schema.max_raft_init_timeout),
+            election_timeout_min: Duration::milliseconds(schema.election_timeout_max),
+            election_timeout_max: Duration::milliseconds(schema.election_timeout_max),
+            heartbeat_interval: Duration::milliseconds(schema.heartbeat_interval),
+            max_payload_entries: schema.max_payload_entries,
+            metrics_rate: Duration::milliseconds(schema.metrics_rate),
+            snapshot_policy: Default::default(),
+            snapshot_dir: schema.snapshot_dir,
+            snapshot_max_chunk_size: schema.snapshot_max_chunk_size,
         }
     }
 }
@@ -93,10 +134,19 @@ impl Configuration {
     where
         S: AsRef<str> + std::fmt::Debug,
     {
+        // let config_rep = format!("{:?}", config);
         config
             .try_into::<ConfigSchema>()
-            .map_err(|err| err.into())
+            // .map(|c| {
+            //     debug!(config = ?config_rep, config_schema = ?c, "parsed config into schema");
+            //     c
+            // })
+            .map_err(|err| {
+                error!(error = ?err, "error parsing config into schema.");
+                err.into()
+            })
             .map(|schema| {
+                // debug!(config = ?config_rep, config_schema = ?schema, "creating Configuration from schema.");
                 Configuration {
                     host: host.as_ref().to_owned(),
                     ..schema.into()
@@ -130,5 +180,21 @@ impl Configuration {
         info!("CLI options {:?}", opt);
         let ref_path = std::path::Path::new("config/reference.toml");
         Self::load_from_opt(opt, ref_path)
+    }
+}
+
+impl Into<::actix_raft::Config> for Configuration {
+    fn into(self) -> ::actix_raft::Config {
+        ::actix_raft::Config::build(self.snapshot_dir.to_string_lossy().to_string())
+            .election_timeout_min(self.election_timeout_min.num_milliseconds() as u16)
+            .election_timeout_max(self.election_timeout_max.num_milliseconds() as u16)
+            .heartbeat_interval(self.heartbeat_interval.num_milliseconds() as u16)
+            .metrics_rate(
+                self.metrics_rate.to_std().expect("Duration parsing")
+            )
+            .snapshot_policy(self.snapshot_policy)
+            .snapshot_max_chunk_size(self.snapshot_max_chunk_size)
+            .validate()
+            .expect("Raft config to be create without error.")
     }
 }
