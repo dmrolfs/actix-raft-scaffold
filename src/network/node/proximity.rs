@@ -192,6 +192,9 @@ impl<D: AppData> ChangeClusterBehavior<D> for RemoteNode {
         remove_members: Vec<NodeId>,
         _ctx: &<Node<D> as Actor>::Context
     ) -> Result<(), NodeError> {
+        //todo: I think cluster mutating operations should Err(NotLeader).
+        unimplemented!();
+
         let command = entities::RaftProtocolCommand::ProposeConfigChange {
             add_members: add_members.iter().map(|m| (*m).into()).collect(),
             remove_members: remove_members.iter().map(|m| (*m).into()).collect(),

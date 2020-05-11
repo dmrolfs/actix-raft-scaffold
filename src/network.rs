@@ -110,7 +110,7 @@ impl<D: AppData> Network<D> {
         Network {
             id,
             info: info.clone(),
-            state: NetworkState::default(),
+            state: Default::default(),
             discovery,
             nodes,
             ring,
@@ -133,7 +133,7 @@ impl<D: AppData> Network<D> {
     pub fn configure_with(&mut self, c: &Configuration) {
         info!(network_id = self.id, "configuration:{:?}", c);
 
-        for n in c.nodes.values() {
+        for n in c.seed_nodes.values() {
             let id = utils::generate_node_id(n.cluster_address.as_str());
             let node_ref = NodeRef {
                 id,

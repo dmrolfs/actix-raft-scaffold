@@ -1,3 +1,5 @@
+#![feature(try_trait)]
+
 use serde::{Serialize, Deserialize};
 
 // pub mod api {
@@ -12,6 +14,7 @@ pub mod raft_system;
 pub mod fib;
 pub mod ports;
 pub mod network;
+pub mod storage;
 pub mod raft;
 pub mod ring; //todo move into private and support tailoring via configuration
 
