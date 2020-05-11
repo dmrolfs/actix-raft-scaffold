@@ -107,6 +107,15 @@ where
     c.set("discovery_host_address", "127.0.0.1:8080").unwrap();
     c.set("join_strategy", "static").unwrap();
     c.set("ring_replicas", 10).unwrap();
+    c.set("max_discovery_timeout", 5).unwrap();
+    c.set("max_raft_init_timeout", 5).unwrap();
+    c.set("election_timeout_min", 200).unwrap();
+    c.set("election_timeout_max", 300).unwrap();
+    c.set("heartbeat_interval", 50).unwrap();
+    c.set("max_payload_entries", 300).unwrap();
+    c.set("metrics_rate", 5).unwrap();
+    c.set("snapshot_dir", "/data/snapshots/").unwrap();
+    c.set("snapshot_max_chunk_size", 3_145_728).unwrap();
 
     c.set::<Vec<std::collections::HashMap<String, String>>>(
         "nodes",
@@ -149,7 +158,7 @@ fn test_network_create() {
 }
 
 #[test]
-fn test_configure_network() {
+fn test_network_configure() {
     fixtures::setup_logger();
     let span = span!( Level::INFO, "test_network_bind" );
     let _ = span.enter();
@@ -467,7 +476,7 @@ fn create_and_bind_network() -> (ConnectNodePrep, impl Future<Item = ClusterSumm
 // }
 
 #[test]
-fn test_cmd_connect_node_no_leader() {
+fn test_network_cmd_connect_node_no_leader() {
     fixtures::setup_logger();
     let span = span!(Level::DEBUG, "test_cmd_connect_node_no_leader");
     let _ = span.enter();
@@ -540,7 +549,7 @@ fn test_cmd_connect_node_no_leader() {
 }
 
 #[test]
-fn test_cmd_connect_node_change_info() {
+fn test_network_cmd_connect_node_change_info() {
     fixtures::setup_logger();
     let span = span!(Level::DEBUG, "test_cmd_connect_node_change_info");
     let _ = span.enter();
@@ -628,7 +637,7 @@ fn test_cmd_connect_node_change_info() {
 
 
 #[test]
-fn test_cmd_connect_node_leader() {
+fn test_network_cmd_connect_node_leader() {
     fixtures::setup_logger();
     let span = span!(Level::DEBUG, "test_cmd_connect_node_leader");
     let _ = span.enter();
