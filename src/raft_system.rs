@@ -1,5 +1,8 @@
 use actix::prelude::*;
-use actix_raft::{NodeId, AppData};
+use actix_raft::{
+    NodeId,
+    AppData, AppDataResponse, AppError, RaftStorage,
+};
 use thiserror::Error;
 use tracing::*;
 use crate::{
@@ -25,15 +28,27 @@ pub enum RaftSystemError {
     Unknown,
 }
 
-pub struct RaftSystem<D: AppData> {
+pub struct RaftSystem<D, R, E, S>
+    where
+        D: AppData,
+        R: AppDataResponse,
+        E: AppError,
+        S: RaftStorage<D, R, E>,
+{
     pub id: NodeId,
     // pub raft: Addr<RaftClient>,
-    pub network: Addr<Network<D>>,
+    pub network: Addr<Network<D, R, E, S>>,
     configuration: Configuration,
     info: NodeInfo,
 }
 
-impl<D: AppData> std::fmt::Debug for RaftSystem<D> {
+impl<D, R, E, S> std::fmt::Debug for RaftSystem<D, R, E, S>
+    where
+        D: AppData,
+        R: AppDataResponse,
+        E: AppError,
+        S: RaftStorage<D, R, E>,
+{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -43,9 +58,15 @@ impl<D: AppData> std::fmt::Debug for RaftSystem<D> {
     }
 }
 
-impl<D: AppData> RaftSystem<D> {
+impl<D, R, E, S> RaftSystem<D, R, E, S>
+    where
+        D: AppData,
+        R: AppDataResponse,
+        E: AppError,
+        S: RaftStorage<D, R, E>,
+{
     #[tracing::instrument]
-    pub fn new() -> Result<RaftSystem<D>,  RaftSystemError> {
+    pub fn new() -> Result<RaftSystem<D, R, E, S>,  RaftSystemError> {
         let config = Configuration::load()?;
         info!("configuration = {:?}", config);
         // let config = match Configuration::load() {
@@ -83,7 +104,7 @@ impl<D: AppData> RaftSystem<D> {
 
     #[tracing::instrument]
     // pub fn start(&self) -> Result<(), RaftSystemError> {
-    pub fn start(&self, data: PortData<D>) -> Result<(), RaftSystemError> {
+    pub fn start(&self, data: PortData<D, R, E, S>) -> Result<(), RaftSystemError> {
         self.network
             .send( BindEndpoint::new(data))
             .map(|res| res.unwrap() )

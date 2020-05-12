@@ -1,13 +1,14 @@
 use std::collections::BTreeMap;
 use std::marker::PhantomData;
 use std::net::SocketAddr;
+use std::pin::Pin;
 use std::time::{Instant, Duration};
 use actix::prelude::*;
 use actix_server::Server;
 use actix_raft::{
     NodeId,
-    AppData,
-    metrics::RaftMetrics,
+    Raft, AppData, AppDataResponse, AppError, RaftStorage,
+    metrics::RaftMetrics
 };
 use tokio::timer::Delay;
 use tracing::*;
@@ -19,7 +20,10 @@ use crate::{
     utils,
 };
 use state::*;
-use node::{Node, NodeRef, NodeStatus};
+use node::{
+    Node, NodeRef, NodeStatus, UpdateProximity,
+    ProximityBehavior, LocalNode, RemoteNode,
+};
 use summary::ClusterSummary;
 
 pub use messages::NetworkError;
@@ -58,7 +62,13 @@ pub mod summary;
 //     }
 // }
 
-pub struct Network<D: AppData> {
+pub struct Network<D, R, E, S>
+where
+    D: AppData,
+    R: AppDataResponse,
+    E: AppError,
+    S: RaftStorage<D, R, E>,
+{
     pub id: NodeId,
     pub info: NodeInfo,
     pub state: NetworkState,
@@ -66,11 +76,18 @@ pub struct Network<D: AppData> {
     pub nodes: BTreeMap<NodeId, NodeRef<D>>,
     pub ring: RingType,
     pub metrics: Option<RaftMetrics>,
+    pub raft: Option<Addr<Raft<D, R, E, Network<D, R, E, S>, S>>>,
     pub server: Option<Server>,
     marker_data: PhantomData<D>,
 }
 
-impl<D: AppData> std::fmt::Debug for Network<D> {
+impl<D, R, E, S> std::fmt::Debug for Network<D, R, E, S>
+where
+    D: AppData,
+    R: AppDataResponse,
+    E: AppError,
+    S: RaftStorage<D, R, E>,
+{
     fn fmt(&self, f:&mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -84,13 +101,25 @@ impl<D: AppData> std::fmt::Debug for Network<D> {
     }
 }
 
-impl<D: AppData> std::fmt::Display for Network<D> {
+impl<D, R, E, S> std::fmt::Display for Network<D, R, E, S>
+    where
+        D: AppData,
+        R: AppDataResponse,
+        E: AppError,
+        S: RaftStorage<D, R, E>,
+{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Network(id:{} state:{})", self.id, self.state,)
     }
 }
 
-impl<D: AppData> Network<D> {
+impl<D, R, E, S> Network<D, R, E, S>
+    where
+        D: AppData,
+        R: AppDataResponse,
+        E: AppError,
+        S: RaftStorage<D, R, E>,
+{
     pub fn new(
         id: NodeId,
         info: &NodeInfo,
@@ -115,6 +144,7 @@ impl<D: AppData> Network<D> {
             nodes,
             ring,
             metrics: None,
+            raft: None,
             server: None,
             marker_data: std::marker::PhantomData,
         }
@@ -197,19 +227,32 @@ impl<D: AppData> Network<D> {
                 Ok(())
             },
 
-            Some(node_ref) => {
+            Some(node_ref) if self.raft.is_some() => {
                 info!(network_id = self.id, node_id = node_ref.id, "updating node info and connecting...");
+
                 node_ref.info = Some(node_info.clone());
-                let node = Node::new(
+                let proximity = Self::determine_proximity(self.id, node_id, node_info, self.raft.clone());
+                let node = Node::new::<R, E, S>(
                     node_id,
                     node_info.clone(),
                     self.id,
                     self.info.clone(),
-                    self_addr,
+                    proximity,
+                    self_addr.recipient(),
                 );
                 node_ref.addr = Some(node.start());
                 Ok(())
             },
+
+            Some(node_ref) => {
+                info!(
+                    network_id = self.id, node_id = node_ref.id,
+                    "updating node info but need Raft actor to connect."
+                );
+
+                node_ref.info = Some(node_info.clone());
+                Ok(())
+            }
 
             None => {
                 let err_msg = format!("No node#{} registered in Network#{}.", node_id, self.id);
@@ -229,9 +272,30 @@ impl<D: AppData> Network<D> {
     /// Restore the network of the specified node.
     #[tracing::instrument(skip(self))]
     fn restore_node(&mut self, id: NodeId) { self.state.restore_node(id); }
+
+    // #[tracing::instrument(skip(raft))]
+    fn determine_proximity(
+        local_id: NodeId,
+        node_id: NodeId,
+        node_info: &NodeInfo,
+        raft: Option<Addr<Raft<D, R, E, Network<D, R, E, S>, S>>>
+    ) -> Pin<Box<dyn ProximityBehavior<D> + Send>> {
+        if node_id == local_id {
+            debug_assert!(raft.is_some(), "cannot set LocalNode without registered raft.");
+            Box::pin(LocalNode::new(local_id, raft.unwrap()))
+        } else {
+            Box::pin(RemoteNode::new(node_id, node_info.clone()))
+        }
+    }
 }
 
-impl<D: AppData> Actor for Network<D> {
+impl<D, R, E, S> Actor for Network<D, R, E, S>
+    where
+        D: AppData,
+        R: AppDataResponse,
+        E: AppError,
+        S: RaftStorage<D, R, E>,
+{
     type Context = Context<Self>;
 
     #[tracing::instrument(skip(self, ctx))]
@@ -248,7 +312,143 @@ impl<D: AppData> Actor for Network<D> {
     }
 }
 
-impl<D: AppData> Handler<RaftMetrics> for Network<D> {
+#[derive(Clone)]
+pub struct RegisterRaft<D, R, E, S>(Addr<Raft<D, R, E, Network<D, R, E, S>, S>>)
+where
+    D: AppData,
+    R: AppDataResponse,
+    E: AppError,
+    S: RaftStorage<D, R, E>;
+
+impl<D, R, E, S> Message for RegisterRaft<D, R, E, S>
+where
+    D: AppData,
+    R: AppDataResponse,
+    E: AppError,
+    S: RaftStorage<D, R, E>,
+{
+    type Result = Result<(), NetworkError>;
+}
+
+impl<D, R, E, S> std::fmt::Debug for RegisterRaft<D, R, E, S>
+    where
+        D: AppData,
+        R: AppDataResponse,
+        E: AppError,
+        S: RaftStorage<D, R, E>,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "RegisterRaft")
+    }
+}
+
+impl<D, R, E, S> Handler<RegisterRaft<D, R, E, S>> for Network<D, R, E, S>
+where
+    D: AppData,
+    R: AppDataResponse,
+    E: AppError,
+    S: RaftStorage<D, R, E>,
+{
+    type Result = ResponseActFuture<Self, (), NetworkError>;
+
+    #[tracing::instrument(skip(self, ctx))]
+    fn handle(&mut self, msg: RegisterRaft<D, R, E, S>, ctx: &mut Self::Context) -> Self::Result {
+        info!(network_id = self.id, "Registering Raft actor with Network - updating LocalNode.");
+        self.raft = Some(msg.0);
+
+        match self.nodes.get_mut(&self.id) {
+            Some(NodeRef{id, info: Some(info), addr: Some(node)}) => {
+                info!(
+                    network_id = self.id,
+                    "Registering raft with new proximity in existing LocalNode."
+                );
+
+                let new_proximity = Self::determine_proximity(self.id, *id, info, self.raft.clone());
+                let update_proximity = UpdateProximity::new(*id, new_proximity);
+
+                Box::new(
+                    fut::wrap_future::<_, Self>(node.send(update_proximity))
+                        .map_err(|err, _, _| NetworkError::from(err))
+                )
+            },
+
+            Some(NodeRef{id, info: Some(info), addr: None}) => {
+                info!(network_id = self.id, "Registering raft and instantiating LocalNode.");
+
+                //todo: look for a prettier way to negotiate borrow checker.
+                let nid = *id;
+                let ninfo = info.clone();
+                let naddr = ctx.address();
+                let register_res = self.register_node(nid, &ninfo, naddr);
+                match register_res {
+                    Ok(_) => {
+                        info!(network_id = self.id, node_id = nid, "node fully registered.");
+                        Box::new(fut::ok(()))
+                    },
+
+                    Err(err) => {
+                        error!(
+                            network_id = self.id, node_id = nid, error = ?err,
+                            "Error during node registration"
+                        );
+                        Box::new(fut::err(err))
+                    }
+                }
+            },
+
+            Some(NodeRef{id: _, info: None, addr: _}) => {
+                info!(
+                    network_id = self.id,
+                    "Registering raft but NodeInfo info needed to complete LocalNode."
+                );
+                Box::new(fut::ok(()))
+            },
+
+            None => {
+                info!(
+                    network_id = self.id,
+                    "Registering raft, but Network wasn't started."
+                );
+                Box::new(fut::err(
+                    NetworkError::Unknown("Shouldn't happen: RegisterRaft command sent to unstarted Network actor.".to_string())
+                ))
+            }
+        }
+
+        //
+        // let result = self.nodes
+        //     .get(&self.id)
+        //     .and_then(|nr| {
+        //         nr.info
+        //             .and_then(|info| {
+        //                 nr.addr.map(|node| (nr.id, info, node))
+        //             })
+        //     })
+        //     .and_then(|(node_id, node_info, node_addr)| {
+        //         let new_proximity = self.determine_proximity(node_id, &node_info);
+        //         let update_proximity = UpdateProximity::new(node_id, new_proximity);
+        //         let task = Box::new(
+        //             fut::wrap_future::<_, Self>(node_addr.send(update_proximity))
+        //                 .map_err(|err, _, _| NetworkError::from(err))
+        //         );
+        //         task
+        //     })
+        //     .unwrap_or_else(|| {
+        //
+        //         Box::new(fut::ok::<(), NetworkError, Self>(()))
+        //     });
+        //
+        // result
+    }
+}
+
+impl<D, R, E, S> Handler<RaftMetrics> for Network<D, R, E, S>
+    where
+        D: AppData,
+        R: AppDataResponse,
+        E: AppError,
+        S: RaftStorage<D, R, E>,
+{
     type Result = ();
 
     #[tracing::instrument(skip(self, _ctx))]
@@ -266,25 +466,61 @@ impl<D: AppData> Handler<RaftMetrics> for Network<D> {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct BindEndpoint<D: AppData> {
-    data: PortData<D>
+#[derive(Clone)]
+pub struct BindEndpoint<D, R, E, S>
+    where
+        D: AppData,
+        R: AppDataResponse,
+        E: AppError,
+        S: RaftStorage<D, R, E>,
+{
+    data: PortData<D, R, E, S>
 }
 
-impl<D: AppData> BindEndpoint<D> {
-    pub fn new(data: PortData<D>) -> Self { BindEndpoint { data } }
+impl<D, R, E, S> BindEndpoint<D, R, E, S>
+    where
+        D: AppData,
+        R: AppDataResponse,
+        E: AppError,
+        S: RaftStorage<D, R, E>,
+{
+    pub fn new(data: PortData<D, R, E, S>) -> Self { BindEndpoint { data } }
 }
 
-impl<D: AppData> Message for BindEndpoint<D> {
+impl<D, R, E, S> Message for BindEndpoint<D, R, E, S>
+    where
+        D: AppData,
+        R: AppDataResponse,
+        E: AppError,
+        S: RaftStorage<D, R, E>,
+{
     type Result = Result<(), NetworkError>;
 }
 
-impl<D: AppData> Handler<BindEndpoint<D>> for Network<D> {
+impl<D, R, E, S> std::fmt::Debug for BindEndpoint<D, R, E, S>
+where
+    D: AppData,
+    R: AppDataResponse,
+    E: AppError,
+    S: RaftStorage<D, R, E>,
+{
+    fn fmt(&self, f:&mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "BindEndpoint({:?})", self.data)
+    }
+}
+
+impl<D, R, E, S> Handler<BindEndpoint<D, R, E, S>> for Network<D, R, E, S>
+    where
+        D: AppData,
+        R: AppDataResponse,
+        E: AppError,
+        S: RaftStorage<D, R, E>,
+{
     type Result = Result<(), NetworkError>;
     // type Result = ResponseActFuture<Self, (), NetworkError>;
 
     #[tracing::instrument(skip(self, _ctx))]
-    fn handle(&mut self, bind: BindEndpoint<D>, _ctx: &mut Self::Context) -> Self::Result {
+    fn handle(&mut self, bind: BindEndpoint<D, R, E, S>, _ctx: &mut Self::Context) -> Self::Result {
         info!(
             network_id = self.id,
             endpoint_address = self.info.cluster_address.as_str(),
@@ -319,7 +555,13 @@ impl Message for GetNode {
     type Result = Result<(NodeId, Option<NodeInfo>), NetworkError>;
 }
 
-impl<D: AppData> Handler<GetNode> for Network<D> {
+impl<D, R, E, S> Handler<GetNode> for Network<D, R, E, S>
+    where
+        D: AppData,
+        R: AppDataResponse,
+        E: AppError,
+        S: RaftStorage<D, R, E>,
+{
     type Result = Result<(NodeId, Option<NodeInfo>), NetworkError>;
 
     fn handle(&mut self, msg: GetNode, _ctx: &mut Self::Context) -> Self::Result {
@@ -388,7 +630,13 @@ impl Message for GetCurrentLeader {
     type Result = Result<CurrentLeader, NetworkError>;
 }
 
-impl<D: AppData> Handler<GetCurrentLeader> for Network<D> {
+impl<D, R, E, S> Handler<GetCurrentLeader> for Network<D, R, E, S>
+    where
+        D: AppData,
+        R: AppDataResponse,
+        E: AppError,
+        S: RaftStorage<D, R, E>,
+{
     type Result = ResponseActFuture<Self, CurrentLeader, NetworkError>;
 
     #[tracing::instrument(skip(self,_ctx))]
@@ -430,7 +678,13 @@ impl Message for GetClusterSummary {
     type Result = Result<ClusterSummary, NetworkError>;
 }
 
-impl<D: AppData> Handler<GetClusterSummary> for Network<D> {
+impl<D, R, E, S> Handler<GetClusterSummary> for Network<D, R, E, S>
+    where
+        D: AppData,
+        R: AppDataResponse,
+        E: AppError,
+        S: RaftStorage<D, R, E>,
+{
     type Result = Result<ClusterSummary, NetworkError>;
 
     #[tracing::instrument]
@@ -439,7 +693,13 @@ impl<D: AppData> Handler<GetClusterSummary> for Network<D> {
     }
 }
 
-impl<D: AppData> Network<D> {
+impl<D, R, E, S> Network<D, R, E, S>
+    where
+        D: AppData,
+        R: AppDataResponse,
+        E: AppError,
+        S: RaftStorage<D, R, E>,
+{
     /// Returns the Addr<Node> if this network is the leader; otherwise if there is consensus, a
     /// NotLeader error referencing the leader or notice there is no elected leader.
     #[tracing::instrument(skip(self))]
@@ -483,7 +743,13 @@ impl<D: AppData> Network<D> {
     }
 }
 
-impl<D: AppData> Handler<HandleNodeStatusChange> for Network<D> {
+impl<D, R, E, S> Handler<HandleNodeStatusChange> for Network<D, R, E, S>
+    where
+        D: AppData,
+        R: AppDataResponse,
+        E: AppError,
+        S: RaftStorage<D, R, E>,
+{
     type Result = ();
 
     #[tracing::instrument(skip(self, _ctx))]
@@ -515,7 +781,13 @@ impl<D: AppData> Handler<HandleNodeStatusChange> for Network<D> {
     }
 }
 
-impl<D: AppData> Network<D> {
+impl<D, R, E, S> Network<D, R, E, S>
+    where
+        D: AppData,
+        R: AppDataResponse,
+        E: AppError,
+        S: RaftStorage<D, R, E>,
+{
     #[tracing::instrument(skip(self, command, ctx))]
     fn handle_connect_remote_node(
         &mut self,
@@ -561,18 +833,18 @@ impl<D: AppData> Network<D> {
     }
 
     #[tracing::instrument(skip(self, _ctx))]
-    fn delegate_to_leader<M, I, E>(
+    fn delegate_to_leader<M, I, E0>(
         &self,
         command: M,
         _ctx: &mut Context<Self>,
-    ) -> impl ActorFuture<Actor = Self, Item = I, Error = E>
+    ) -> impl ActorFuture<Actor = Self, Item = I, Error = E0>
     where
         M: Message + std::fmt::Debug + Send + 'static,
-        M::Result: Into<Result<I, E>>,
+        M::Result: Into<Result<I, E0>>,
         M::Result: Send,
         Node<D>: Actor<Context = Context<Node<D>>> + Handler<M>,
-        E: From<actix::MailboxError>,
-        E: From<NetworkError>,
+        E0: From<actix::MailboxError>,
+        E0: From<NetworkError>,
     {
         debug!(network_id = self.id, ?command, "lookup and delegate command to leader...");
 
@@ -630,7 +902,13 @@ impl<D: AppData> Network<D> {
     }
 }
 
-impl<D: AppData> Handler<ConnectNode> for Network<D> {
+impl<D, R, E, S> Handler<ConnectNode> for Network<D, R, E, S>
+    where
+        D: AppData,
+        R: AppDataResponse,
+        E: AppError,
+        S: RaftStorage<D, R, E>,
+{
     type Result = ResponseActFuture<Self, ConnectionAcknowledged, NetworkError>;
 
     #[tracing::instrument(skip(self, ctx))]

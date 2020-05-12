@@ -1,16 +1,11 @@
-use std::time::Duration;
 use actix::prelude::*;
 use actix::dev::ToEnvelope;
-use actix_server::Server;
 use actix_raft::{
-    NodeId, Raft as ActixRaft,
+    NodeId,
     AppData, AppDataResponse, AppError, RaftStorage,
-    config::{Config, SnapshotPolicy},
 };
-use tracing::*;
 use crate::network::Network;
-use crate::storage::{StorageFactory, RaftStorageType};
-use crate::ring::RingType;
+use crate::storage::StorageFactory;
 use crate::{Configuration, ConfigurationError};
 use crate::raft::Raft;
 
@@ -19,7 +14,7 @@ pub struct RaftBuilder<D, R, E, S>
         D: AppData,
         R: AppDataResponse,
         E: AppError,
-        S: RaftStorageType<D, R, E, Actor = S, Context = Context<S>>,
+        S: RaftStorage<D, R, E, Actor = S, Context = Context<S>>,
         S: Actor<Context = Context<S>>,
         S: Handler<actix_raft::storage::GetInitialState<E>>,
         S: Handler<actix_raft::storage::SaveHardState<E>>,
@@ -31,16 +26,16 @@ pub struct RaftBuilder<D, R, E, S>
         S: Handler<actix_raft::storage::CreateSnapshot<E>>,
         S: Handler<actix_raft::storage::InstallSnapshot<E>>,
         S: Handler<actix_raft::storage::GetCurrentSnapshot<E>>,
-        S: actix::dev::ToEnvelope<S, actix_raft::storage::GetInitialState<E>>,
-        S: actix::dev::ToEnvelope<S, actix_raft::storage::SaveHardState<E>>,
-        S: actix::dev::ToEnvelope<S, actix_raft::storage::GetLogEntries<D, E>>,
-        S: actix::dev::ToEnvelope<S, actix_raft::storage::AppendEntryToLog<D, E>>,
-        S: actix::dev::ToEnvelope<S, actix_raft::storage::ReplicateToLog<D, E>>,
-        S: actix::dev::ToEnvelope<S, actix_raft::storage::ApplyEntryToStateMachine<D, R, E>>,
-        S: actix::dev::ToEnvelope<S, actix_raft::storage::ReplicateToStateMachine<D, E>>,
-        S: actix::dev::ToEnvelope<S, actix_raft::storage::CreateSnapshot<E>>,
-        S: actix::dev::ToEnvelope<S, actix_raft::storage::InstallSnapshot<E>>,
-        S: actix::dev::ToEnvelope<S, actix_raft::storage::GetCurrentSnapshot<E>>,
+        S: ToEnvelope<S, actix_raft::storage::GetInitialState<E>>,
+        S: ToEnvelope<S, actix_raft::storage::SaveHardState<E>>,
+        S: ToEnvelope<S, actix_raft::storage::GetLogEntries<D, E>>,
+        S: ToEnvelope<S, actix_raft::storage::AppendEntryToLog<D, E>>,
+        S: ToEnvelope<S, actix_raft::storage::ReplicateToLog<D, E>>,
+        S: ToEnvelope<S, actix_raft::storage::ApplyEntryToStateMachine<D, R, E>>,
+        S: ToEnvelope<S, actix_raft::storage::ReplicateToStateMachine<D, E>>,
+        S: ToEnvelope<S, actix_raft::storage::CreateSnapshot<E>>,
+        S: ToEnvelope<S, actix_raft::storage::InstallSnapshot<E>>,
+        S: ToEnvelope<S, actix_raft::storage::GetCurrentSnapshot<E>>,
 
 
 // S: RaftStorage<D, R, E, Actor = Self> + Actor<Context = Context<S>>,
@@ -48,7 +43,7 @@ pub struct RaftBuilder<D, R, E, S>
 {
     id: NodeId,
     seed_members: Vec<NodeId>,
-    network: Option<Addr<Network<D>>>,
+    network: Option<Addr<Network<D, R, E, S>>>,
     config: Option<Configuration>,
     storage_factory: Option<Box<dyn StorageFactory<D, R, E, S>>>,
 }
@@ -58,7 +53,8 @@ impl<D, R, E, S> RaftBuilder<D, R, E, S>
         D: AppData,
         R: AppDataResponse,
         E: AppError,
-        S: RaftStorageType<D, R, E, Actor = S, Context = Context<S>>,
+        S: RaftStorage<D, R, E, Actor = S, Context = Context<S>>,
+        S: std::fmt::Debug,
         S: Actor<Context = Context<S>>,
         S: Handler<actix_raft::storage::GetInitialState<E>>,
         S: Handler<actix_raft::storage::SaveHardState<E>>,
@@ -70,16 +66,16 @@ impl<D, R, E, S> RaftBuilder<D, R, E, S>
         S: Handler<actix_raft::storage::CreateSnapshot<E>>,
         S: Handler<actix_raft::storage::InstallSnapshot<E>>,
         S: Handler<actix_raft::storage::GetCurrentSnapshot<E>>,
-        S: actix::dev::ToEnvelope<S, actix_raft::storage::GetInitialState<E>>,
-        S: actix::dev::ToEnvelope<S, actix_raft::storage::SaveHardState<E>>,
-        S: actix::dev::ToEnvelope<S, actix_raft::storage::GetLogEntries<D, E>>,
-        S: actix::dev::ToEnvelope<S, actix_raft::storage::AppendEntryToLog<D, E>>,
-        S: actix::dev::ToEnvelope<S, actix_raft::storage::ReplicateToLog<D, E>>,
-        S: actix::dev::ToEnvelope<S, actix_raft::storage::ApplyEntryToStateMachine<D, R, E>>,
-        S: actix::dev::ToEnvelope<S, actix_raft::storage::ReplicateToStateMachine<D, E>>,
-        S: actix::dev::ToEnvelope<S, actix_raft::storage::CreateSnapshot<E>>,
-        S: actix::dev::ToEnvelope<S, actix_raft::storage::InstallSnapshot<E>>,
-        S: actix::dev::ToEnvelope<S, actix_raft::storage::GetCurrentSnapshot<E>>,
+        S: ToEnvelope<S, actix_raft::storage::GetInitialState<E>>,
+        S: ToEnvelope<S, actix_raft::storage::SaveHardState<E>>,
+        S: ToEnvelope<S, actix_raft::storage::GetLogEntries<D, E>>,
+        S: ToEnvelope<S, actix_raft::storage::AppendEntryToLog<D, E>>,
+        S: ToEnvelope<S, actix_raft::storage::ReplicateToLog<D, E>>,
+        S: ToEnvelope<S, actix_raft::storage::ApplyEntryToStateMachine<D, R, E>>,
+        S: ToEnvelope<S, actix_raft::storage::ReplicateToStateMachine<D, E>>,
+        S: ToEnvelope<S, actix_raft::storage::CreateSnapshot<E>>,
+        S: ToEnvelope<S, actix_raft::storage::InstallSnapshot<E>>,
+        S: ToEnvelope<S, actix_raft::storage::GetCurrentSnapshot<E>>,
 
 
 
@@ -111,7 +107,7 @@ impl<D, R, E, S> RaftBuilder<D, R, E, S>
         self
     }
 
-    pub fn with_network(&mut self, network: Addr<Network<D>>) -> &mut Self {
+    pub fn with_network(&mut self, network: Addr<Network<D, R, E, S>>) -> &mut Self {
         self.network = Some(network);
         self
     }
@@ -132,7 +128,7 @@ impl<D, R, E, S> RaftBuilder<D, R, E, S>
 
                 let local_id = self.id;
                 let storage = self.storage_factory.as_ref()?.create();
-                let network = self.build_network();
+                let network = self.build_network_if_needed();
                 let metrics_recipient = network.clone().recipient();
 
                 let raft = Raft::create(move |_| {
@@ -164,7 +160,7 @@ impl<D, R, E, S> RaftBuilder<D, R, E, S>
         Ok(())
     }
 
-    fn build_network(&self) -> Addr<Network<D>> {
+    fn build_network_if_needed(&self) -> Addr<Network<D, R, E, S>> {
         self.network
             .as_ref()
             .map(|n| n.clone())

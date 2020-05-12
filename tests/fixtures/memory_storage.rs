@@ -7,7 +7,8 @@ use tracing::*;
 use serde::{Serialize, Deserialize};
 use serde_cbor as cbor;
 use actix_raft::{
-    AppData, AppDataResponse, AppError, NodeId,
+    NodeId,
+    AppData, AppDataResponse, AppError, RaftStorage,
     messages::{Entry as RaftEntry, EntrySnapshotPointer, MembershipConfig},
     storage::{
         AppendEntryToLog,
@@ -22,7 +23,6 @@ use actix_raft::{
         HardState,
         InitialState,
         InstallSnapshot,
-        RaftStorage,
         SaveHardState,
     },
 };
@@ -90,12 +90,23 @@ impl MemoryStorage {
     }
 }
 
+impl std::fmt::Debug for MemoryStorage {
+    fn fmt(&self, f:&mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "MemoryStorage(hs:{:?}, snapshot_dir:{:?}, snapshot_data:{:?}, state_machine:{:?}, log:{:?})",
+            self.hs, self.snapshot_dir, self.snapshot_data, self.state_machine, self.log
+        )
+    }
+}
+
 impl Actor for MemoryStorage {
     type Context = Context<Self>;
     fn started(&mut self, _ctx: &mut Self::Context) {}
 }
 
 impl RaftStorage<Data, MemoryStorageResponse, MemoryStorageError> for MemoryStorage {
+// impl Storage<Data, MemoryStorageResponse, MemoryStorageError> for MemoryStorage {
     type Actor = Self;
     type Context = Context<Self>;
 }
@@ -267,7 +278,7 @@ impl Handler<CreateSnapshot<MemoryStorageError>> for MemoryStorage {
             })
             .and_then(|res, _, _| fut::result(res))
             // Clean up old log entries which are now part of the new snapshot.
-            .and_then(move |res, act, _| {
+            .and_then(move |_, act, _| {
                 let path = filepath.to_string_lossy().to_string();
                 debug!(snapshot_file = ?path, "Finished creating snapshot file.");
 
@@ -346,10 +357,10 @@ impl Handler<InstallSnapshot<MemoryStorageError>> for MemoryStorage {
 impl Handler<GetCurrentSnapshot<MemoryStorageError>> for MemoryStorage {
     type Result = ResponseActFuture<Self, Option<CurrentSnapshotData>, MemoryStorageError>;
 
-    #[tracing::instrument(skip(self, msg, _ctx))]
+    #[tracing::instrument(skip(self, _ctx))]
     fn handle(
         &mut self,
-        msg: GetCurrentSnapshot<MemoryStorageError>,
+        _: GetCurrentSnapshot<MemoryStorageError>,
         _ctx: &mut Self::Context
     ) -> Self::Result {
         debug!("Checking for current snapshot.");

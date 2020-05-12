@@ -1,5 +1,5 @@
 use actix::prelude::*;
-use actix_raft::{NodeId, AppData, RaftNetwork, messages as raft_protocol};
+use actix_raft::{AppData, RaftNetwork, messages as raft_protocol};
 use crate::network::node::Node;
 use tracing::*;
 

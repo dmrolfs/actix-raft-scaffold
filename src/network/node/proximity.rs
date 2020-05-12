@@ -1,10 +1,11 @@
 use std::fmt::{Debug, Display};
-use std::marker::PhantomData;
 use actix::prelude::*;
-use actix_raft::{NodeId, AppData, messages as raft_protocol};
+use actix_raft::{NodeId, messages as raft_protocol, admin as raft_admin_protocol};
+use actix_raft::{AppData, AppDataResponse, AppError, RaftStorage};
 use tracing::*;
 use crate::NodeInfo;
 use super::{Node, NodeError};
+use crate::raft::Raft;
 use crate::ports::http::entities::NodeInfoMessage;
 use crate::network::messages;
 use crate::ports::http::entities::{self, raft_protocol_command_response as entities_response};
@@ -16,7 +17,7 @@ pub trait ChangeClusterBehavior<D: AppData> {
         &self,
         add_members: Vec<NodeId>,
         remove_members: Vec<NodeId>,
-        ctx: &<Node<D> as Actor>::Context
+        ctx: &mut <Node<D> as Actor>::Context
     ) -> Result<(), NodeError>;
 }
 
@@ -29,7 +30,7 @@ pub trait ConnectionBehavior<D: AppData> {
     ) -> Result<messages::ConnectionAcknowledged, NodeError>;
 
     //todo: make nonblocking because of distributed network calls
-    fn disconnect(&mut self, _ctx: &mut <Node<D> as Actor>::Context) -> Result<(), NodeError>;
+    fn disconnect(&self, _ctx: &mut <Node<D> as Actor>::Context) -> Result<(), NodeError>;
 }
 
 pub trait RaftProtocolBehavior<D: AppData> {
@@ -60,36 +61,120 @@ Debug + Display
 { }
 
 
-#[derive(Debug)]
-pub struct LocalNode {
+pub struct LocalNode<D, R, E, S>
+where
+    D: AppData,
+    R: AppDataResponse,
+    E: AppError,
+    S: RaftStorage<D, R, E>,
+{
     id: NodeId,
+    raft: Addr<Raft<D, R, E, S>>,
 }
 
-impl LocalNode {
-    #[tracing::instrument]
-    pub fn new(id: NodeId) -> LocalNode { LocalNode { id } }
+impl<D, R, E, S> LocalNode<D, R, E, S>
+where
+    D: AppData,
+    R: AppDataResponse,
+    E: AppError,
+    S: RaftStorage<D, R, E>,
+{
+    #[tracing::instrument(skip(raft))]
+    pub fn new(id: NodeId, raft: Addr<Raft<D, R, E, S>>) -> Self {
+        Self { id, raft }
+    }
 }
 
-impl Display for LocalNode {
+impl<D, R, E, S> std::clone::Clone for LocalNode<D, R, E, S>
+    where
+        D: AppData,
+        R: AppDataResponse,
+        E: AppError,
+        S: RaftStorage<D, R, E>,
+{
+    fn clone(&self) -> Self {
+        Self {
+            id: self.id,
+            raft: self.raft.clone(),
+        }
+    }
+}
+
+impl<D, R, E, S> Debug for LocalNode<D, R, E, S>
+    where
+        D: AppData,
+        R: AppDataResponse,
+        E: AppError,
+        S: RaftStorage<D, R, E>,
+{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "LocalNode#{}", self.id) }
 }
 
-impl<D: AppData> ProximityBehavior<D> for LocalNode {}
+impl<D, R, E, S> Display for LocalNode<D, R, E, S>
+    where
+        D: AppData,
+        R: AppDataResponse,
+        E: AppError,
+        S: RaftStorage<D, R, E>,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "LocalNode#{}", self.id) }
+}
 
-impl<D: AppData> ChangeClusterBehavior<D> for LocalNode {
+impl<D, R, E, S> ProximityBehavior<D> for LocalNode<D, R, E, S>
+    where
+        D: AppData,
+        R: AppDataResponse,
+        E: AppError,
+        S: RaftStorage<D, R, E>,
+{}
+
+impl<D, R, E, S> ChangeClusterBehavior<D> for LocalNode<D, R, E, S>
+    where
+        D: AppData,
+        R: AppDataResponse,
+        E: AppError,
+        S: RaftStorage<D, R, E>,
+{
     #[tracing::instrument(skip(ctx))]
     fn change_cluster_config(
         &self,
         add_members: Vec<NodeId>,
         remove_members: Vec<NodeId>,
-        ctx: &<Node<D> as Actor>::Context
+        ctx: &mut <Node<D> as Actor>::Context
     ) -> Result<(), NodeError> {
         let _node_addr = ctx.address();
-        unimplemented!()
+        warn!(proximity = ?self, ?add_members, ?remove_members, "Changing cluster config.");
+        let proposal = raft_admin_protocol::ProposeConfigChange::new(add_members, remove_members);
+        let task = fut::wrap_future(
+            self.raft.send(proposal)
+                .map_err(|err| {
+                    error!(error = ?err, "Failed to call Node actor to propose config changes.");
+                    ()
+                })
+                .and_then(|res| {
+                    match res {
+                        Ok(_) => Ok(()),
+                        Err(err) => {
+                            error!(error = ?err, "Failed to call Node actor to propose config changes.");
+                            Err(())
+                        }
+                    }
+                })
+        );
+
+        ctx.spawn(task);
+
+        Ok(())
     }
 }
 
-impl<D: AppData> ConnectionBehavior<D> for LocalNode {
+impl<D, R, E, S> ConnectionBehavior<D> for LocalNode<D, R, E, S>
+    where
+        D: AppData,
+        R: AppDataResponse,
+        E: AppError,
+        S: RaftStorage<D, R, E>,
+{
     #[tracing::instrument(skip(self, local_id_info, _ctx))]
     fn connect(
         &self,
@@ -101,18 +186,25 @@ impl<D: AppData> ConnectionBehavior<D> for LocalNode {
     }
 
     #[tracing::instrument(skip(self, _ctx))]
-    fn disconnect(&mut self, _ctx: &mut <Node<D> as Actor>::Context) -> Result<(), NodeError> {
+    fn disconnect(&self, _ctx: &mut <Node<D> as Actor>::Context) -> Result<(), NodeError> {
         Ok(())
     }
 }
 
-impl<D: AppData> RaftProtocolBehavior<D> for LocalNode {
+impl<D, R, E, S> RaftProtocolBehavior<D> for LocalNode<D, R, E, S>
+    where
+        D: AppData,
+        R: AppDataResponse,
+        E: AppError,
+        S: RaftStorage<D, R, E>,
+{
     #[tracing::instrument(skip(self, msg, _ctx))]
     fn append_entries(
         &self,
         msg: raft_protocol::AppendEntriesRequest<D>,
         _ctx: &mut <Node<D> as Actor>::Context
     ) -> Box<dyn Future<Item = raft_protocol::AppendEntriesResponse, Error = NodeError>> {
+        //todo: WORK HERE
         Box::new(
             futures::future::ok(raft_protocol::AppendEntriesResponse {
                 term: 1,
@@ -128,6 +220,7 @@ impl<D: AppData> RaftProtocolBehavior<D> for LocalNode {
         msg: raft_protocol::InstallSnapshotRequest,
         _ctx: &mut <Node<D> as Actor>::Context
     ) -> Box<dyn Future<Item = raft_protocol::InstallSnapshotResponse, Error = NodeError>> {
+        //todo WORK HERE
         Box::new(futures::future::ok(raft_protocol::InstallSnapshotResponse { term: 1 }))
     }
 
@@ -137,6 +230,7 @@ impl<D: AppData> RaftProtocolBehavior<D> for LocalNode {
         msg: raft_protocol::VoteRequest,
         _ctx: &mut <Node<D> as Actor>::Context
     ) -> Box<dyn Future<Item = raft_protocol::VoteResponse, Error = NodeError>> {
+        //todo WORK HERE
         Box::new(
             futures::future::ok(raft_protocol::VoteResponse {
                 term: 1,
@@ -156,12 +250,12 @@ pub struct RemoteNode {
 
 impl RemoteNode {
     #[tracing::instrument]
-    pub fn new(remote_id: NodeId, remote_info: NodeInfo) -> RemoteNode {
+    pub fn new(remote_id: NodeId, remote_info: NodeInfo) -> Self {
         let client = reqwest::Client::builder()
             .build()
             .expect(format!("prebuilt client for RemoteNode#{}", remote_id).as_str());
 
-        RemoteNode { remote_id, remote_info, client, }
+        Self { remote_id, remote_info, client, }
     }
 
     fn scope(&self) -> String {
@@ -182,6 +276,16 @@ impl Debug for RemoteNode {
     }
 }
 
+impl std::clone::Clone for RemoteNode {
+    fn clone(&self) -> Self {
+        Self {
+            remote_id: self.remote_id,
+            remote_info: self.remote_info.clone(),
+            client: self.client.clone(),
+        }
+    }
+}
+
 impl<D: AppData> ProximityBehavior<D> for RemoteNode {}
 
 impl<D: AppData> ChangeClusterBehavior<D> for RemoteNode {
@@ -190,7 +294,7 @@ impl<D: AppData> ChangeClusterBehavior<D> for RemoteNode {
         &self,
         add_members: Vec<NodeId>,
         remove_members: Vec<NodeId>,
-        _ctx: &<Node<D> as Actor>::Context
+        _ctx: &mut <Node<D> as Actor>::Context
     ) -> Result<(), NodeError> {
         //todo: I think cluster mutating operations should Err(NotLeader).
         unimplemented!();
@@ -278,6 +382,7 @@ impl<D: AppData> ConnectionBehavior<D> for RemoteNode {
         local_id_info: (NodeId, &NodeInfo),
         _ctx: &mut <Node<D> as Actor>::Context
     ) -> Result<messages::ConnectionAcknowledged, NodeError> {
+        //todo WORK HERE
         let register_node_route = format!("{}/nodes/{}", self.scope(), self.remote_id);
         debug!(
             local_id = local_id_info.0,
@@ -328,8 +433,9 @@ impl<D: AppData> ConnectionBehavior<D> for RemoteNode {
 
 
     #[tracing::instrument(skip(self, _ctx))]
-    fn disconnect(&mut self, _ctx: &mut <Node<D> as Actor>::Context) -> Result<(), NodeError> {
+    fn disconnect(&self, _ctx: &mut <Node<D> as Actor>::Context) -> Result<(), NodeError> {
         info!(remote_id = self.remote_id, "disconnecting RemoteNode");
+        //todo WORK HERE
         Ok(())
     }
 }
@@ -341,6 +447,7 @@ impl<D: AppData> RaftProtocolBehavior<D> for RemoteNode {
         msg: raft_protocol::AppendEntriesRequest<D>,
         _ctx: &mut <Node<D> as Actor>::Context
     ) -> Box<dyn Future<Item = raft_protocol::AppendEntriesResponse, Error = NodeError>> {
+        //todo WORK HERE
         Box::new(
             futures::future::ok(raft_protocol::AppendEntriesResponse {
                 term: 1,
@@ -356,6 +463,7 @@ impl<D: AppData> RaftProtocolBehavior<D> for RemoteNode {
         msg: raft_protocol::InstallSnapshotRequest,
         _ctx: &mut <Node<D> as Actor>::Context
     ) -> Box<dyn Future<Item = raft_protocol::InstallSnapshotResponse, Error = NodeError>> {
+        //todo WORK HERE
         Box::new(futures::future::ok(raft_protocol::InstallSnapshotResponse { term: 1 }))
     }
 
@@ -365,6 +473,7 @@ impl<D: AppData> RaftProtocolBehavior<D> for RemoteNode {
         msg: raft_protocol::VoteRequest,
         _ctx: &mut <Node<D> as Actor>::Context
     ) -> Box<dyn Future<Item = raft_protocol::VoteResponse, Error = NodeError>> {
+        //todo WORK HERE
         Box::new(
             futures::future::ok(raft_protocol::VoteResponse {
                 term: 1,

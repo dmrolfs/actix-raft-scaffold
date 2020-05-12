@@ -1,5 +1,5 @@
 use actix::prelude::*;
-use actix_raft::AppData;
+use actix_raft::{AppData, AppDataResponse, AppError, RaftStorage};
 use thiserror::Error;
 use crate::network::Network;
 use super::fib::FibActor;
@@ -15,12 +15,38 @@ pub enum PortError {
     Unknown,
 }
 
-#[derive(Clone)]
-pub struct PortData<D: AppData> {
+pub struct PortData<D, R, E, S>
+    where
+        D: AppData,
+        R: AppDataResponse,
+        E: AppError,
+        S: RaftStorage<D, R, E>,
+{
     pub fib: Addr<FibActor>,
-    pub network: Addr<Network<D>>,
+    pub network: Addr<Network<D, R, E, S>>,
 }
 
-impl<D: AppData> std::fmt::Debug for PortData<D> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "AppPortData") }
+impl<D, R, E, S> std::clone::Clone for PortData<D, R, E, S>
+    where
+        D: AppData,
+        R: AppDataResponse,
+        E: AppError,
+        S: RaftStorage<D, R, E>,
+{
+    fn clone(&self) -> Self {
+        Self {
+            fib: self.fib.clone(),
+            network: self.network.clone(),
+        }
+    }
+}
+
+impl<D, R, E, S> std::fmt::Debug for PortData<D, R, E, S>
+    where
+        D: AppData,
+        R: AppDataResponse,
+        E: AppError,
+        S: RaftStorage<D, R, E>,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "PortData") }
 }

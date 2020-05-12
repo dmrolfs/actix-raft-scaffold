@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::time::{Duration as StdDuration};
 use chrono::Duration;
 use serde::Deserialize;
 use structopt::StructOpt;
@@ -10,7 +9,7 @@ use tracing::*;
 use ::config::Config;
 use crate::{NodeInfo, NodeList};
 use actix_raft::SnapshotPolicy;
-use std::option::NoneError;
+
 
 #[derive(Error, Debug)]
 pub enum ConfigurationError {
@@ -134,19 +133,13 @@ impl Configuration {
     where
         S: AsRef<str> + std::fmt::Debug,
     {
-        // let config_rep = format!("{:?}", config);
         config
             .try_into::<ConfigSchema>()
-            // .map(|c| {
-            //     debug!(config = ?config_rep, config_schema = ?c, "parsed config into schema");
-            //     c
-            // })
             .map_err(|err| {
                 error!(error = ?err, "error parsing config into schema.");
                 err.into()
             })
             .map(|schema| {
-                // debug!(config = ?config_rep, config_schema = ?schema, "creating Configuration from schema.");
                 Configuration {
                     host: host.as_ref().to_owned(),
                     ..schema.into()

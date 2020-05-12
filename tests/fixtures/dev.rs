@@ -3,6 +3,7 @@ use std::time::Duration;
 use actix::prelude::*;
 use actix_raft::{
     Raft, NodeId,
+    AppData, AppDataResponse, AppError,
     messages::{
         AppendEntriesRequest, AppendEntriesResponse,
         InstallSnapshotRequest, InstallSnapshotResponse,
@@ -19,7 +20,7 @@ pub type MemRaft = Raft<
     Data,
     MemoryStorageResponse,
     MemoryStorageError,
-    Network<Data>,
+    Network<Data, MemoryStorageResponse, MemoryStorageError, MemoryStorage>,
     MemoryStorage
 >;
 

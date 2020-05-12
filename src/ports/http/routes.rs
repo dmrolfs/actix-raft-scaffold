@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use futures::{Future, future};
 use actix_web::{web, Error, HttpRequest, HttpResponse};
-use actix_raft::AppData;
+use actix_raft::{AppData, AppDataResponse, AppError, RaftStorage};
 use tracing::*;
 use crate::ports::PortData;
 use super::entities;
@@ -16,12 +16,18 @@ fn node_id_from_path( req: &HttpRequest ) -> Result<u64, std::num::ParseIntError
 }
 
 // NodeInfoMessage > ChangeClusterMembershipResponse
-pub fn connect_node_route<D: AppData>(
+pub fn connect_node_route<D, R, E, S>(
     body: web::Json<entities::NodeInfoMessage>,
     req: HttpRequest,
     _stream: web::Payload,
-    srv: web::Data<Arc<PortData<D>>>,
-) -> impl Future<Item = HttpResponse, Error = Error> {
+    srv: web::Data<Arc<PortData<D, R, E, S>>>,
+) -> impl Future<Item = HttpResponse, Error = Error>
+where
+    D: AppData,
+    R: AppDataResponse,
+    E: AppError,
+    S: RaftStorage<D, R, E>,
+{
     //todo
     let nid = node_id_from_path(&req).expect("valid numerical node id");
 
@@ -70,11 +76,17 @@ pub fn connect_node_route<D: AppData>(
 }
 
 // NodeIdMessage > ChangeClusterMembershipResponse
-pub fn disconnect_node_route<D: AppData>(
+pub fn disconnect_node_route<D, R, E, S>(
     req: HttpRequest,
     _stream: web::Payload,
-    _srv: web::Data<Arc<PortData<D>>>,
-) -> impl Future<Item = HttpResponse, Error = Error> {
+    _srv: web::Data<Arc<PortData<D, R, E, S>>>,
+) -> impl Future<Item = HttpResponse, Error = Error>
+    where
+        D: AppData,
+        R: AppDataResponse,
+        E: AppError,
+        S: RaftStorage<D, R, E>,
+{
     //todo
     let nid = node_id_from_path(&req).expect("valid numerical node id");
     info!("leave cluster request {:?}", nid);
@@ -82,11 +94,17 @@ pub fn disconnect_node_route<D: AppData>(
 }
 
 // NodeIdMessage > NodeInfoMessage
-pub fn node_route<D: AppData>(
+pub fn node_route<D, R, E, S>(
     req: HttpRequest,
     _stream: web::Payload,
-    _srv: web::Data<Arc<PortData<D>>>,
-) -> impl Future<Item = HttpResponse, Error = Error> {
+    _srv: web::Data<Arc<PortData<D, R, E, S>>>,
+) -> impl Future<Item = HttpResponse, Error = Error>
+    where
+        D: AppData,
+        R: AppDataResponse,
+        E: AppError,
+        S: RaftStorage<D, R, E>,
+{
     //todo
     let nid = node_id_from_path(&req).expect("valid numerical node id");
 
@@ -103,11 +121,17 @@ pub fn node_route<D: AppData>(
 }
 
 // ClusterNodesRequest > ClusterNodesResponse
-pub fn all_nodes_route<D: AppData>(
+pub fn all_nodes_route<D, R, E, S>(
     _req: HttpRequest,
     _stream: web::Payload,
-    _srv: web::Data<Arc<PortData<D>>>,
-) -> impl Future<Item = HttpResponse, Error = Error> {
+    _srv: web::Data<Arc<PortData<D, R, E, S>>>,
+) -> impl Future<Item = HttpResponse, Error = Error>
+    where
+        D: AppData,
+        R: AppDataResponse,
+        E: AppError,
+        S: RaftStorage<D, R, E>,
+{
     // srv.network
     //     .send(GetNodes)
     //     .map_err(Error::from)
@@ -123,11 +147,17 @@ pub fn all_nodes_route<D: AppData>(
 
 // ClusterStateRequest > ClusterStateResponse
 #[tracing::instrument(skip(_stream, srv))]
-pub fn state_route<D: AppData>(
+pub fn state_route<D, R, E, S>(
     _req: HttpRequest,
     _stream: web::Payload,
-    srv: web::Data<Arc<PortData<D>>>,
-) -> impl Future<Item = HttpResponse, Error = Error> {
+    srv: web::Data<Arc<PortData<D, R, E, S>>>,
+) -> impl Future<Item = HttpResponse, Error = Error>
+    where
+        D: AppData,
+        R: AppDataResponse,
+        E: AppError,
+        S: RaftStorage<D, R, E>,
+{
     srv.network
         .send(GetClusterSummary)
         .map_err(|err| actix_web::error::ErrorInternalServerError(err))
@@ -146,34 +176,52 @@ pub fn state_route<D: AppData>(
 }
 
 // AppendEntries: RaftAppendEntriesRequest > RaftAppendEntriesResponse
-pub fn append_entries_route<D: AppData>(
+pub fn append_entries_route<D, R, E, S>(
     _body: web::Json<entities::RaftAppendEntriesRequest>,
     _req: HttpRequest,
     _stream: web::Payload,
-    _srv: web::Data<Arc<PortData<D>>>,
-) ->  impl Future<Item = HttpResponse, Error = Error> {
+    _srv: web::Data<Arc<PortData<D, R, E, S>>>,
+) ->  impl Future<Item = HttpResponse, Error = Error>
+    where
+        D: AppData,
+        R: AppDataResponse,
+        E: AppError,
+        S: RaftStorage<D, R, E>,
+{
     info!("RAFT append entries");
     future::ok( HttpResponse::Ok().json(()))
 }
 
 // InstallSnaphot: RaftInstallSnapshotRequest > RaftInstallSnapshotResponse
-pub fn install_snapshot_route<D: AppData>(
+pub fn install_snapshot_route<D, R, E, S>(
     _body: web::Json<entities::RaftInstallSnapshotRequest>,
     _req: HttpRequest,
     _stream: web::Payload,
-    _srv: web::Data<Arc<PortData<D>>>,
-) ->  impl Future<Item = HttpResponse, Error = Error> {
+    _srv: web::Data<Arc<PortData<D, R, E, S>>>,
+) ->  impl Future<Item = HttpResponse, Error = Error>
+    where
+        D: AppData,
+        R: AppDataResponse,
+        E: AppError,
+        S: RaftStorage<D, R, E>,
+{
     info!("RAFT install snapshot");
     future::ok( HttpResponse::Ok().json(()))
 }
 
 // Vote: RaftVoteRequest > RaftVoteResponse
-pub fn vote_route<D: AppData>(
+pub fn vote_route<D, R, E, S>(
     body: web::Json<entities::RaftVoteRequest>,
     _req: HttpRequest,
     _stream: web::Payload,
-    _srv: web::Data<Arc<PortData<D>>>,
-) ->  impl Future<Item = HttpResponse, Error = Error> {
+    _srv: web::Data<Arc<PortData<D, R, E, S>>>,
+) ->  impl Future<Item = HttpResponse, Error = Error>
+    where
+        D: AppData,
+        R: AppDataResponse,
+        E: AppError,
+        S: RaftStorage<D, R, E>,
+{
     info!("RAFT vote");
 
     let vote_req = body.into_inner();
@@ -188,12 +236,18 @@ pub fn vote_route<D: AppData>(
 }
 
 #[tracing::instrument(skip(_stream, _src))]
-pub fn raft_protocol_route<D: AppData>(
+pub fn raft_protocol_route<D, R, E, S>(
     body: web::Json<entities::RaftProtocolCommand>,
     _req: HttpRequest,
     _stream: web::Payload,
-    _src: web::Data<Arc<PortData<D>>>,
-) -> impl Future<Item = HttpResponse, Error = Error> {
+    _src: web::Data<Arc<PortData<D, R, E, S>>>,
+) -> impl Future<Item = HttpResponse, Error = Error>
+    where
+        D: AppData,
+        R: AppDataResponse,
+        E: AppError,
+        S: RaftStorage<D, R, E>,
+{
     let command = body.into_inner();
     info!("RAFT protocol:{:?}", command);
 

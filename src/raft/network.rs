@@ -1,16 +1,32 @@
 use actix::prelude::*;
-use actix_raft::{NodeId, RaftNetwork, AppData, messages as raft_protocol};
+use actix_raft::{
+    NodeId, RaftNetwork,
+    AppData, AppDataResponse, AppError, RaftStorage,
+    messages as raft_protocol
+};
 use tracing::*;
 
-use crate::network::{Network, NetworkError};
+use crate::network::Network;
 
 pub mod node;
 
 const ERR_ROUTING_FAILURE: &str = "Failed to send RCP to node target.";
 
-impl<D: AppData> RaftNetwork<D> for Network<D> {}
+impl<D, R, E, S> RaftNetwork<D> for Network<D, R, E, S>
+    where
+        D: AppData,
+        R: AppDataResponse,
+        E: AppError,
+        S: RaftStorage<D, R, E>,
+{}
 
-impl<D: AppData> Handler<raft_protocol::AppendEntriesRequest<D>> for Network<D> {
+impl<D, R, E, S> Handler<raft_protocol::AppendEntriesRequest<D>> for Network<D, R, E, S>
+    where
+        D: AppData,
+        R: AppDataResponse,
+        E: AppError,
+        S: RaftStorage<D, R, E>,
+{
     type Result = ResponseActFuture<Self, raft_protocol::AppendEntriesResponse, ()>;
 
     #[tracing::instrument(skip(self, _ctx))]
@@ -43,7 +59,13 @@ impl<D: AppData> Handler<raft_protocol::AppendEntriesRequest<D>> for Network<D> 
     }
 }
 
-impl<D: AppData> Handler<raft_protocol::VoteRequest> for Network<D> {
+impl<D, R, E, S> Handler<raft_protocol::VoteRequest> for Network<D, R, E, S>
+    where
+        D: AppData,
+        R: AppDataResponse,
+        E: AppError,
+        S: RaftStorage<D, R, E>,
+{
     type Result = ResponseActFuture<Self, raft_protocol::VoteResponse, ()>;
 
     #[tracing::instrument(skip(self, _ctx))]
@@ -76,7 +98,13 @@ impl<D: AppData> Handler<raft_protocol::VoteRequest> for Network<D> {
     }
 }
 
-impl<D: AppData> Network<D> {
+impl<D, R, E, S> Network<D, R, E, S>
+    where
+        D: AppData,
+        R: AppDataResponse,
+        E: AppError,
+        S: RaftStorage<D, R, E>,
+{
     fn ignore_in_isolation(
         &self,
         target_id: NodeId,
@@ -92,7 +120,13 @@ impl<D: AppData> Network<D> {
     }
 }
 
-impl<D: AppData> Handler<raft_protocol::InstallSnapshotRequest> for Network<D> {
+impl<D, R, E, S> Handler<raft_protocol::InstallSnapshotRequest> for Network<D, R, E, S>
+    where
+        D: AppData,
+        R: AppDataResponse,
+        E: AppError,
+        S: RaftStorage<D, R, E>,
+{
     type Result = ResponseActFuture<Self, raft_protocol::InstallSnapshotResponse, ()>;
 
     #[tracing::instrument(skip(self, _ctx))]

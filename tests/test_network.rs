@@ -21,12 +21,14 @@ use actix_raft_scaffold::config::Configuration;
 use actix_raft_scaffold::fib::FibActor;
 use actix_raft_scaffold::ports::{PortData, http::entities};
 use actix_raft_scaffold::network::summary::ClusterSummary;
-use crate::fixtures::memory_storage::Data;
+use crate::fixtures::memory_storage::{Data, MemoryStorageResponse, MemoryStorageError, MemoryStorage};
 
 
 const NODE_A_ADDRESS: &str = "127.0.0.1:8000";
 const NODE_B_ADDRESS: &str = "127.0.0.1:8001";
 const NODE_C_ADDRESS: &str = "127.0.0.1:8002";
+
+type TestNetwork = Network<Data, MemoryStorageResponse, MemoryStorageError, MemoryStorage>;
 
 fn make_node_a(address: SocketAddr) -> NodeInfo {
     NodeInfo {
@@ -92,7 +94,7 @@ fn make_expected_nodes() -> BTreeMap<NodeId, NodeInfo> {
     expected_nodes
 }
 
-fn make_test_network(node_info: &NodeInfo) -> Network<Data> {
+fn make_test_network(node_info: &NodeInfo) -> TestNetwork {
     let node_id = utils::generate_node_id(node_info.cluster_address.as_str());
     let ring = Ring::new(10);
     let discovery = "127.0.0.1:8888".parse::<SocketAddr>().unwrap();
@@ -387,15 +389,41 @@ fn test_network_bind() {
     raft_mock.assert();
 }
 
-#[derive(Clone)]
-struct ConnectNodePrep {
-    pub network: Addr<Network<Data>>,
+struct ConnectNodePrep<D, R, E, S>
+where
+    D: AppData,
+    R: AppDataResponse,
+    E: AppError,
+    S: RaftStorage<D, R, E>,
+{
+    pub network: Addr<Network<D, R, E, S>>,
     pub network_id: NodeId,
     pub members: HashMap<NodeId, NodeInfo>,
 }
 
+impl<D, R, E, S> std::clone::Clone for ConnectNodePrep<D, R, E, S>
+where
+    D: AppData,
+    R: AppDataResponse,
+    E: AppError,
+    S: RaftStorage<D, R, E>,
+{
+    fn clone(&self) -> Self {
+        Self {
+            network: self.network.clone(),
+            network_id: self.network_id,
+            members: self.members.clone(),
+        }
+    }
+}
+
 #[tracing::instrument]
-fn create_and_bind_network() -> (ConnectNodePrep, impl Future<Item = ClusterSummary, Error = NetworkError>) {
+fn create_and_bind_network() ->
+    (
+        ConnectNodePrep<Data, MemoryStorageResponse, MemoryStorageError, MemoryStorage>,
+        impl Future<Item = ClusterSummary, Error = NetworkError>
+    )
+{
     let node_a = make_node_a("[::1]:8888".parse().unwrap());
     let node_a_1 = node_a.clone();
     let node_b = make_node_b(server_address());

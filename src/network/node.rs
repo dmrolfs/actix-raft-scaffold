@@ -1,5 +1,6 @@
 use std::fmt::Debug;
 use std::time::Duration;
+use std::pin::Pin;
 use actix::prelude::*;
 use actix_raft::{NodeId, AppData};
 use thiserror::Error;
@@ -7,14 +8,14 @@ use tracing::*;
 use strum_macros::{Display as StrumDisplay};
 use serde::{Serialize, Deserialize};
 use crate::NodeInfo;
-use super::{Network, HandleNodeStatusChange};
+use super::HandleNodeStatusChange;
 use super::messages::{
     NetworkError,
     ConnectNode, ConnectionAcknowledged,
     ChangeClusterConfig,
 };
 
-use proximity::*;
+pub use proximity::{ProximityBehavior, LocalNode, RemoteNode};
 
 mod proximity;
 
@@ -60,13 +61,19 @@ pub enum NodeError {
 pub struct NodeRef<D: AppData> {
     pub id: NodeId,
     //todo log when cluster config beats join
-    pub info: Option<NodeInfo>, // option for the case where cluster config change beats join; log when this occurs
+    pub info: Option<NodeInfo>,
+    // option for the case where cluster config change beats join; log when this occurs
     pub addr: Option<Addr<Node<D>>>,
 }
 
+
 impl<D: AppData> Debug for NodeRef<D> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "NodeRef(id:{}, info:{:?}, started:{})", self.id, self.info, self.addr.is_some())
+        write!(
+            f,
+            "NodeRef(id:{}, info:{:?}, started:{})",
+            self.id, self.info, self.addr.is_some()
+        )
     }
 }
 
@@ -94,28 +101,32 @@ impl NodeStatus {
 pub struct Node<D: AppData> {
     pub id: NodeId, // id of the node (remote or local)
     pub local_id: NodeId, // id local to the machine of the node this instance exists
-    pub proximity: Box<dyn ProximityBehavior<D>>,
+    pub proximity: Pin<Box<dyn ProximityBehavior<D>>>,
     pub status: NodeStatus,
     pub local_info: NodeInfo,
     // heartbeat_interval: Option<Duration>,
-    pub network: Addr<Network<D>>,
+    pub network: Recipient<HandleNodeStatusChange>,
 }
 
 impl<D: AppData> Node<D> {
-    #[tracing::instrument]
-    pub fn new(
+    #[tracing::instrument(skip(network))]
+    pub fn new<R, E, S>(
         id: NodeId,
         info: NodeInfo,
         local_id: NodeId,
         local_info: NodeInfo,
+        proximity: Pin<Box<dyn ProximityBehavior<D>>>,
         // heartbeat_interval: Duration,
-        network: Addr<Network<D>>,
-    ) -> Self {
-        let proximity = Node::determine_proximity(local_id, id, &info);
-
+        network: Recipient<HandleNodeStatusChange>,
+    ) -> Self
+    where
+        R: actix_raft::AppDataResponse,
+        E: actix_raft::AppError,
+        S: actix_raft::RaftStorage<D, R, E>,
+    {
         info!(local_id, node_id = id, ?proximity, "Creating Node");
 
-        Node {
+        Self {
             id,
             local_id,
             proximity,
@@ -123,19 +134,6 @@ impl<D: AppData> Node<D> {
             local_info,
             // heartbeat_interval,
             network,
-        }
-    }
-
-    #[tracing::instrument]
-    fn determine_proximity(
-        local_id: NodeId,
-        node_id: NodeId,
-        node_info: &NodeInfo
-    ) -> Box<dyn ProximityBehavior<D>> {
-        if node_id == local_id {
-            Box::new(LocalNode::new(local_id))
-        } else {
-            Box::new(RemoteNode::new(node_id, node_info.clone()))
         }
     }
 
@@ -169,7 +167,24 @@ impl<D: AppData> Node<D> {
             NodeStatus::Disconnected => { status } ,
         };
 
-        self.network.do_send( HandleNodeStatusChange { id: self.id, status: new_status, });
+        let handle_res= self.network.do_send( HandleNodeStatusChange { id: self.id, status: new_status });
+        match handle_res {
+            Ok(_) => {
+                info!(
+                    local_id = self.local_id, node_id = self.id,
+                    "Network handled node status change to {:?}", new_status
+                );
+                ()
+            },
+
+            Err(err) => {
+                error!(
+                    local_id = self.local_id, node_id = self.id,
+                    "Error in network handling of node status change to {:?}", new_status
+                );
+                ()
+            }
+        }
     }
 
     // fn handle_change_cluster_config<P>(proximity: &P, to_add: Vec<NodeId>, to_remove: Vec<NodeId>)
@@ -356,6 +371,45 @@ impl<D: AppData> Node<D> {
     }
 }
 
+#[derive(Message, Debug)]
+pub struct UpdateProximity<D: AppData> {
+    pub node_id: NodeId,
+    pub proximity: Pin<Box<dyn ProximityBehavior<D> + Send>>,
+}
+
+impl<D: AppData> UpdateProximity<D> {
+    pub fn new(node_id: NodeId, new_proximity: Pin<Box<dyn ProximityBehavior<D> + Send>>) -> Self {
+        Self {
+            node_id,
+            proximity: new_proximity,
+        }
+    }
+}
+
+// impl<D: AppData> std::clone::Clone for UpdateProximity<D> {
+//     fn clone(&self) -> Self {
+//
+//         Self {
+//             node_id: self.node_id,
+//             proximity: self.proximity,
+//         }
+//     }
+// }
+
+impl<D: AppData> Handler<UpdateProximity<D>> for Node<D> {
+    type Result = ();
+
+    #[tracing::instrument(skip(self, _ctx))]
+    fn handle(&mut self, msg: UpdateProximity<D>, _ctx: &mut Self::Context) -> Self::Result {
+        info!(
+            local_id = self.local_id, node_id = self.id, proximity = ?self.proximity,
+            "Updating proximity behavior."
+        );
+
+        self.proximity = msg.proximity;
+    }
+}
+
 impl<D: AppData> Handler<ChangeClusterConfig> for Node<D> {
     type Result = Result<(), NetworkError>;
 
@@ -369,7 +423,7 @@ impl<D: AppData> Handler<ChangeClusterConfig> for Node<D> {
 
 impl<D: AppData> Node<D> {
     #[tracing::instrument]
-    fn join_node(&self, node_id: NodeId, ctx: &<Node<D> as Actor>::Context) -> Result<(), NodeError>{
+    fn join_node(&self, node_id: NodeId, ctx: &mut <Node<D> as Actor>::Context) -> Result<(), NodeError>{
         self.proximity
             .change_cluster_config(vec![node_id], vec![], ctx)
     }
