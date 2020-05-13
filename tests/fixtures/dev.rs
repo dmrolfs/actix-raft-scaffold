@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 use actix::prelude::*;
 use actix_raft::{
-    Raft, NodeId,
+    NodeId,
     AppData, AppDataResponse, AppError,
     messages::{
         AppendEntriesRequest, AppendEntriesResponse,
@@ -13,14 +13,13 @@ use actix_raft::{
     metrics::{RaftMetrics, State},
 };
 use tracing::*;
-use actix_raft_scaffold::network::Network;
-use super::memory_storage::{Data, MemoryStorageResponse, MemoryStorageError, MemoryStorage};
+use actix_raft_scaffold::raft::Raft;
+use super::memory_storage::{MemoryStorageData, MemoryStorageResponse, MemoryStorageError, MemoryStorage};
 
 pub type MemRaft = Raft<
-    Data,
+    MemoryStorageData,
     MemoryStorageResponse,
     MemoryStorageError,
-    Network<Data, MemoryStorageResponse, MemoryStorageError, MemoryStorage>,
     MemoryStorage
 >;
 

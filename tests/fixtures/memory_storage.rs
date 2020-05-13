@@ -26,9 +26,17 @@ use actix_raft::{
         SaveHardState,
     },
 };
+use actix_raft_scaffold::storage::StorageFactory;
+use actix::dev::{ToEnvelope, Envelope};
+use futures::sync::oneshot::Sender;
+use actix_raft_scaffold::Configuration;
 
 
 pub type Data = MemoryStorageData;
+pub type Response = MemoryStorageResponse;
+pub type Error = MemoryStorageError;
+pub type Storage = MemoryStorage;
+
 type Entry = RaftEntry<Data>;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -58,6 +66,53 @@ impl std::fmt::Display for MemoryStorageError {
 impl std::error::Error for MemoryStorageError {}
 
 impl AppError for MemoryStorageError {}
+
+#[derive(Default, Debug, Clone)]
+pub struct MemoryStorageFactory {
+    members: Option<Vec<NodeId>>,
+    configuration: Option<Configuration>,
+}
+
+impl MemoryStorageFactory {
+    pub fn new() -> Self { Default::default() }
+
+    pub fn with_members(&mut self, members: Vec<NodeId>) -> &mut Self {
+        self.members = Some(members);
+        self
+    }
+
+    pub fn with_configuration(&mut self, c: &Configuration) -> &mut Self {
+        self.configuration = Some(c.clone());
+        self
+    }
+
+    pub fn collect(&self) -> Self {
+        self.clone()
+    }
+
+    fn validate(&self) {
+        if self.configuration.is_none() {
+            panic!("Must set configuration for MemoryStorageFactory before create.");
+        }
+
+        if self.members.is_none() {
+            panic!("Must set seed members (even if none) in MemoryStorageFactor before create.");
+        }
+    }
+}
+
+impl StorageFactory<Data, Response, Error, Storage> for MemoryStorageFactory {
+    fn create(&self) -> Addr<<MemoryStorage as RaftStorage<Data, Response, Error>>::Actor> {
+        self.validate();
+        let storage = MemoryStorage::new(
+            self.members.as_ref().unwrap().clone(),
+            self.configuration.as_ref().unwrap().snapshot_dir.to_string_lossy().to_string()
+        );
+
+        let storage_arb = Arbiter::new();
+        MemoryStorage::start_in_arbiter(&storage_arb, |_| storage)
+    }
+}
 
 
 pub struct MemoryStorage {
@@ -105,8 +160,7 @@ impl Actor for MemoryStorage {
     fn started(&mut self, _ctx: &mut Self::Context) {}
 }
 
-impl RaftStorage<Data, MemoryStorageResponse, MemoryStorageError> for MemoryStorage {
-// impl Storage<Data, MemoryStorageResponse, MemoryStorageError> for MemoryStorage {
+impl RaftStorage<MemoryStorageData, MemoryStorageResponse, MemoryStorageError> for MemoryStorage {
     type Actor = Self;
     type Context = Context<Self>;
 }
@@ -365,6 +419,15 @@ impl Handler<GetCurrentSnapshot<MemoryStorageError>> for MemoryStorage {
     ) -> Self::Result {
         debug!("Checking for current snapshot.");
         Box::new(fut::ok(self.snapshot_data.clone()))
+    }
+}
+
+impl ToEnvelope<MemoryStorage, GetCurrentSnapshot<Error>> for MemoryStorage {
+    fn pack(
+        msg: GetCurrentSnapshot<Error>,
+        tx: Option<Sender<<GetCurrentSnapshot<MemoryStorageError> as Message>::Result>>
+    ) -> Envelope<MemoryStorage> {
+        Envelope::new(msg, tx)
     }
 }
 
