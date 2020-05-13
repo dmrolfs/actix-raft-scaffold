@@ -227,32 +227,47 @@ impl<D, R, E, S> Network<D, R, E, S>
                 Ok(())
             },
 
-            Some(node_ref) if self.raft.is_some() => {
+            Some(node_ref) => { //if self.raft.is_some() => {
                 info!(network_id = self.id, node_id = node_ref.id, "updating node info and connecting...");
 
                 node_ref.info = Some(node_info.clone());
-                let proximity = Self::determine_proximity(self.id, node_id, node_info, self.raft.clone());
-                let node = Node::new::<R, E, S>(
-                    node_id,
-                    node_info.clone(),
-                    self.id,
-                    self.info.clone(),
-                    proximity,
-                    self_addr.recipient(),
-                );
-                node_ref.addr = Some(node.start());
+
+                let proximity_res = Self::determine_proximity(self.id, node_id, node_info, self.raft.clone());
+                debug!(network_id = self.id, node_id, "proximity determined: {:?}", proximity_res);
+                match proximity_res {
+                    Ok(proximity) => {
+                        info!(network_id = self.id, node_id, ?proximity, "starting Node actor");
+                        let node = Node::new::<R, E, S>(
+                            node_id,
+                            node_info.clone(),
+                            self.id,
+                            self.info.clone(),
+                            proximity,
+                            self_addr.recipient(),
+                        );
+                        node_ref.addr = Some(node.start());
+                    },
+
+                    Err(_) => {
+                        info!(
+                            network_id = self.id, node_id = node_id,
+                            "Cannot set proximity before registered raft."
+                        );
+                    },
+                };
+
                 Ok(())
             },
 
-            Some(node_ref) => {
-                info!(
-                    network_id = self.id, node_id = node_ref.id,
-                    "updating node info but need Raft actor to connect."
-                );
-
-                node_ref.info = Some(node_info.clone());
-                Ok(())
-            }
+            // Some(node_ref) => {
+            //     info!(
+            //         network_id = self.id, node_id = node_ref.id,
+            //         "updating node info but need Raft actor to connect."
+            //     );
+            //
+            //     node_ref.info = Some(node_info.clone());
+            //     Ok(())
+            // }
 
             None => {
                 let err_msg = format!("No node#{} registered in Network#{}.", node_id, self.id);
@@ -279,12 +294,14 @@ impl<D, R, E, S> Network<D, R, E, S>
         node_id: NodeId,
         node_info: &NodeInfo,
         raft: Option<Addr<Raft<D, R, E, Network<D, R, E, S>, S>>>
-    ) -> Pin<Box<dyn ProximityBehavior<D> + Send>> {
+    ) -> Result<Pin<Box<dyn ProximityBehavior<D> + Send>>, ()> {
         if node_id == local_id {
-            debug_assert!(raft.is_some(), "cannot set LocalNode without registered raft.");
-            Box::pin(LocalNode::new(local_id, raft.unwrap()))
+            match raft {
+                Some(r) => Ok(Box::pin(LocalNode::new(local_id, r))),
+                None => Err(()),
+            }
         } else {
-            Box::pin(RemoteNode::new(node_id, node_info.clone()))
+            Ok(Box::pin(RemoteNode::new(node_id, node_info.clone())))
         }
     }
 }
@@ -303,8 +320,8 @@ impl<D, R, E, S> Actor for Network<D, R, E, S>
         //todo: create LocalNode for this id and push into nodes_connected;
         // info!("starting Network actor for node: {}", self.id);
         info!(network_id = self.id, "registering nodes configured with network...");
-        let nodes = self.nodes.clone();
-        for (node_id, node_ref) in nodes.iter() {
+        // let nodes = self.nodes.clone();
+        for (node_id, node_ref) in self.nodes.clone().iter() {
             if let Some(info) = &node_ref.info {
                 self.register_node(*node_id, info, ctx.address()).unwrap();
             }
@@ -313,7 +330,7 @@ impl<D, R, E, S> Actor for Network<D, R, E, S>
 }
 
 #[derive(Clone)]
-pub struct RegisterRaft<D, R, E, S>(Addr<Raft<D, R, E, Network<D, R, E, S>, S>>)
+pub struct RegisterRaft<D, R, E, S>(pub Addr<Raft<D, R, E, Network<D, R, E, S>, S>>)
 where
     D: AppData,
     R: AppDataResponse,
@@ -321,11 +338,11 @@ where
     S: RaftStorage<D, R, E>;
 
 impl<D, R, E, S> Message for RegisterRaft<D, R, E, S>
-where
-    D: AppData,
-    R: AppDataResponse,
-    E: AppError,
-    S: RaftStorage<D, R, E>,
+    where
+        D: AppData,
+        R: AppDataResponse,
+        E: AppError,
+        S: RaftStorage<D, R, E>,
 {
     type Result = Result<(), NetworkError>;
 }
@@ -356,6 +373,8 @@ where
         info!(network_id = self.id, "Registering Raft actor with Network - updating LocalNode.");
         self.raft = Some(msg.0);
 
+        // let foo = self.nodes.get_mut(&self.id)
+
         match self.nodes.get_mut(&self.id) {
             Some(NodeRef{id, info: Some(info), addr: Some(node)}) => {
                 info!(
@@ -363,13 +382,42 @@ where
                     "Registering raft with new proximity in existing LocalNode."
                 );
 
-                let new_proximity = Self::determine_proximity(self.id, *id, info, self.raft.clone());
-                let update_proximity = UpdateProximity::new(*id, new_proximity);
+                let local_id = self.id;
+                let ref_id = *id;
+                let ref_info = info.clone();
+                let ref_node = node.clone();
+                let ref_raft = self.raft.clone();
 
                 Box::new(
-                    fut::wrap_future::<_, Self>(node.send(update_proximity))
-                        .map_err(|err, _, _| NetworkError::from(err))
+                    fut::result::<_, _, Self>(Self::determine_proximity(local_id, ref_id, &ref_info, ref_raft))
+                        .map_err(move |_, network, _| {
+                            error!(
+                                network_id = network.id, node_id = ref_id,
+                                "Failed to determine node proximity since Raft registration failed."
+                            );
+                            NetworkError::Unknown(
+                                format!(
+                                    "[network_id={}] [node_id={}] Failed to determine node proximity since Raft registration failed.",
+                                    network.id, ref_id
+                                )
+                            )
+                        })
+                        .and_then(move |p, _, _| {
+                            let cmd = UpdateProximity::new(ref_id, p);
+                            fut::wrap_future::<_, Self>(ref_node.send(cmd))
+                                .map_err(|err, _, _| NetworkError::from(err))
+                        })
+                        // .and_then(|res, a, c| fut::result(res))
                 )
+                //
+                //
+                // let new_proximity = Self::determine_proximity(self.id, *id, info, self.raft.clone());
+                // let update_proximity = UpdateProximity::new(*id, new_proximity);
+                //
+                // Box::new(
+                //     fut::wrap_future::<_, Self>(node.send(update_proximity))
+                //         .map_err(|err, _, _| NetworkError::from(err))
+                // )
             },
 
             Some(NodeRef{id, info: Some(info), addr: None}) => {
