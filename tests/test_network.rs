@@ -25,7 +25,7 @@ use actix_raft_scaffold::{
     fib::FibActor,
 };
 
-use actix_raft_scaffold::network::summary::ClusterSummary;
+use actix_raft_scaffold::network::summary::{ClusterSummary, RaftState};
 use crate::fixtures::memory_storage::{
     Data, Response, Error, Storage,
     MemoryStorageFactory,
@@ -98,14 +98,14 @@ fn make_expected_nodes() -> BTreeMap<NodeId, NodeInfo> {
     };
 
     let mut expected_nodes = BTreeMap::new();
-    expected_nodes.insert(utils::generate_node_id(expected_a.cluster_address.as_str()), expected_a);
-    expected_nodes.insert(utils::generate_node_id(expected_b.cluster_address.as_str()), expected_b);
-    expected_nodes.insert(utils::generate_node_id(expected_c.cluster_address.as_str()), expected_c);
+    expected_nodes.insert(expected_a.node_id(), expected_a);
+    expected_nodes.insert(expected_b.node_id(), expected_b);
+    expected_nodes.insert(expected_c.node_id(), expected_c);
     expected_nodes
 }
 
 fn make_test_network(node_info: &NodeInfo) -> TestNetwork {
-    let node_id = utils::generate_node_id(node_info.cluster_address.as_str());
+    let node_id = node_info.node_id();
     let ring = Ring::new(10);
     let discovery = "127.0.0.1:8888".parse::<SocketAddr>().unwrap();
     Network::new(node_id, node_info, ring, discovery)
@@ -151,8 +151,8 @@ fn test_network_create() {
     };
 
     let actual = make_test_network(&node_info);
-    info!("actual.id:{} expected.id:{}", actual.id, utils::generate_node_id(node_info.cluster_address.as_str()) );
-    assert_eq!(actual.id, utils::generate_node_id(node_info.cluster_address.as_str()));
+    info!("actual.id:{} expected.id:{}", actual.id, node_info.node_id() );
+    assert_eq!(actual.id, node_info.node_id());
     assert_eq!(actual.info, node_info);
     assert_eq!(actual.state.unwrap(), Status::Joining);
     assert_eq!(actual.state.extent(), Extent::SingleNode);
@@ -183,8 +183,8 @@ fn test_network_configure() {
     let mut actual = make_test_network(&node_info);
     actual.configure_with(&config);
 
-    info!("actual.id:{} expected.id:{}", actual.id, utils::generate_node_id(node_info.cluster_address.as_str()) );
-    assert_eq!(actual.id, utils::generate_node_id(node_info.cluster_address.as_str()) );
+    info!("actual.id:{} expected.id:{}", actual.id, node_info.node_id() );
+    assert_eq!(actual.id, node_info.node_id() );
     assert_eq!(actual.info, node_info);
     assert_eq!(actual.state.unwrap(), Status::Joining);
     assert_eq!(actual.state.extent(), Extent::SingleNode);
@@ -284,7 +284,7 @@ fn test_network_builder() {
     let config = make_test_configuration("node_a", node_infos.iter().by_ref().collect());
     let local_id = utils::generate_node_id(NODE_A_ADDRESS);
     let seed_members = node_infos.iter()
-        .map(|info| { utils::generate_node_id(info.cluster_address.as_str()) })
+        .map(|info| { info.node_id() })
         .collect();
     let storage_factory = MemoryStorageFactory::new()
         .with_members(seed_members)
@@ -298,12 +298,6 @@ fn test_network_builder() {
         .unwrap();
 
     let node_info = make_node_a(NODE_A_ADDRESS.parse().unwrap());
-    // let nodes = make_all_nodes();
-    // let nodes_ref = nodes.iter().by_ref().collect();
-    // let config = make_test_configuration("node_a", nodes_ref);
-    // let mut network = make_test_network(&node_info);
-    // network.configure_with(&config);
-    // let network_addr = network.start();
 
     let test = system.network.send(GetClusterSummary)
         .map_err(|err| {
@@ -343,9 +337,6 @@ fn test_network_builder() {
         });
 
     info!("#### BEFORE BLOCK...");
-    // System::current().stop_on_panic();
-    // sys.block_on(test);
-    // info!("#### ... AFTER BLOCK");
     spawn(test);
 
     assert!(sys.run().is_ok(), "error during test");
@@ -363,10 +354,12 @@ fn test_network_bind() {
 
     let node_a = make_node_a(NODE_A_ADDRESS.parse().unwrap());
     let node_b = make_node_b(server_address());
+    let node_infos = vec![node_a.clone(), node_b.clone()];
+    let seed_members: Vec<NodeId> = node_infos.iter().map(|info| info.node_id()).collect();
+    let expected_members: Vec<NodeId> = seed_members.clone();
+    let config = make_test_configuration("node_a", node_infos.iter().by_ref().collect());
 
-    let config = make_test_configuration("node_a", vec![&node_a, &node_b]);
-
-    let node_b_id = crate::utils::generate_node_id(node_b.cluster_address.as_str());
+    let node_b_id = node_b.node_id();
     let b_path_exp = format!("/api/cluster/nodes/{}", node_b_id );
     info!("mock b path = {}", b_path_exp);
 
@@ -392,26 +385,34 @@ fn test_network_bind() {
         let s = span!(Level::INFO, "build_network");
         let _ = s.enter();
 
-        let mut network = make_test_network(&node_a);
-        network.configure_with(&config);
-        let network_addr = network.start();
+        let storage_factory = MemoryStorageFactory::new()
+            .with_members(seed_members)
+            .with_configuration(&config)
+            .collect();
+
+        let system = RaftBuilder::new(node_a.node_id())
+            .with_configuration(&config)
+            .with_storage_factory(storage_factory)
+            .build()
+            .unwrap();
 
         let fib_act = FibActor::new();
         let fib_addr = fib_act.start();
 
         let data = PortData {
             fib: fib_addr,
-            network: network_addr.clone(),
+            network: system.network.clone(),
         };
 
-        let network2 = network_addr.clone();
-        let test = network_addr.send(BindEndpoint::new(data))
+        let network2 = system.network.clone();
+
+        let test = system.network.send(BindEndpoint::new(data))
             .map_err(|err| {
                 error!("error in bind: {:?}", err);
                 panic!(err)
             })
             .and_then( |_| {
-                Delay::new(Instant::now() + Duration::from_secs(1))
+                Delay::new(Instant::now() + Duration::from_millis(50))
                     .map_err(|err| { panic!(err) })
             })
             .and_then( move |_| {
@@ -451,7 +452,22 @@ fn test_network_bind() {
                 // assert_eq!(actual.connected_nodes.len(), 0); //todo bad
                 assert_eq!(actual.state.connected_nodes().len(), 2);
 
-                debug_assert!(actual.metrics.is_none(), "no raft metrics");
+                assert!(actual.metrics.is_some(), "raft metrics");
+                let a_metrics = actual.metrics.unwrap();
+                assert_eq!(a_metrics.id, actual.id);
+                assert_eq!(a_metrics.last_log_index, 0);
+                assert_eq!(a_metrics.current_term, 0);
+                assert_eq!(a_metrics.state, RaftState::Follower);
+                assert_eq!(a_metrics.current_leader, None);
+                assert_eq!(a_metrics.last_applied, 0);
+
+                let e_membership = actix_raft::messages::MembershipConfig {
+                    is_in_joint_consensus: false,
+                    members: expected_members.clone(),
+                    non_voters: Vec::new(),
+                    removing: Vec::new(),
+                };
+                assert_eq!(a_metrics.membership_config, e_membership);
 
                 Ok(())
             })
@@ -520,7 +536,7 @@ fn create_and_bind_network() ->
     let node_b = make_node_b(server_address());
     let config = make_test_configuration("node_a", vec![&node_a, &node_b]);
 
-    let node_b_id = crate::utils::generate_node_id(node_b.cluster_address.as_str());
+    let node_b_id = node_b.node_id();
     let b_path_exp = format!("/api/cluster/nodes/{}", node_b_id);
     info!("mock b path = {}", b_path_exp);
 
@@ -545,7 +561,7 @@ fn create_and_bind_network() ->
         })
         .and_then( |_| {
             debug!("delaying for a sec...");
-            Delay::new( Instant::now() + Duration::from_secs(1)).map_err(|err| panic!(err))
+            Delay::new( Instant::now() + Duration::from_millis(50)).map_err(|err| panic!(err))
         })
         .and_then(move |_| {
             debug!("getting summary...");
@@ -565,8 +581,8 @@ fn create_and_bind_network() ->
             futures::future::ok::<ClusterSummary, NetworkError>(actual)
         });
 
-    let node_a_id = crate::utils::generate_node_id(node_a.cluster_address.as_str());
-    let node_b_id = crate::utils::generate_node_id(node_b.cluster_address.as_str());
+    let node_a_id = node_a.node_id();
+    let node_b_id = node_b.node_id();
     let mut members = HashMap::new();
     members.insert(node_a_id, node_a);
     members.insert(node_b_id, node_b);
@@ -659,6 +675,7 @@ fn test_network_cmd_connect_node_no_leader() {
             futures::future::ok(res)
         })
         .then(|_| {
+            info!("************* Testing Completed ***********");
             actix::System::current().stop();
             Ok(())
         });
@@ -746,6 +763,7 @@ fn test_network_cmd_connect_node_change_info() {
             futures::future::ok(())
         })
         .then(|_| {
+            info!("************* Testing Completed ***********");
             actix::System::current().stop();
             Ok(())
         });
@@ -842,6 +860,7 @@ fn test_network_cmd_connect_node_leader() {
             futures::future::ok(res)
         })
         .then(|_| {
+            info!("************* Testing Completed ***********");
             actix::System::current().stop();
             Ok(())
         });

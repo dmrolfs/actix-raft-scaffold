@@ -17,6 +17,7 @@ use crate::{
     utils,
 };
 use std::option::NoneError;
+use crate::network::RegisterRaft;
 
 #[derive(Error, Debug)]
 pub enum RaftSystemError {
@@ -138,36 +139,16 @@ pub struct RaftBuilder<D, R, E, S>
         S: RaftStorage<D, R, E>,
         S: std::fmt::Debug,
         S: Actor,
-        //
         S: Handler<actix_raft::storage::GetInitialState<E>>,
-        // S::Context: ToEnvelope<S, actix_raft::storage::GetInitialState<E>>,
-        //
         S: Handler<actix_raft::storage::SaveHardState<E>>,
-        // S::Context: ToEnvelope<S, actix_raft::storage::SaveHardState<E>>,
-        //
         S: Handler<actix_raft::storage::GetLogEntries<D, E>>,
-        // S::Context: ToEnvelope<S, actix_raft::storage::GetLogEntries<D, E>>,
-        //
         S: Handler<actix_raft::storage::AppendEntryToLog<D, E>>,
-        // S::Context: ToEnvelope<S, actix_raft::storage::AppendEntryToLog<D, E>>,
-        //
         S: Handler<actix_raft::storage::ReplicateToLog<D, E>>,
-        // S::Context: ToEnvelope<S, actix_raft::storage::ReplicateToLog<D, E>>,
-        //
         S: Handler<actix_raft::storage::ApplyEntryToStateMachine<D, R, E>>,
-        // S::Context: ToEnvelope<S, actix_raft::storage::ApplyEntryToStateMachine<D, R, E>>,
-        //
         S: Handler<actix_raft::storage::ReplicateToStateMachine<D, E>>,
-        // S::Context: ToEnvelope<S, actix_raft::storage::ReplicateToStateMachine<D, E>>,
-        //
         S: Handler<actix_raft::storage::CreateSnapshot<E>>,
-        // S::Context: ToEnvelope<S, actix_raft::storage::CreateSnapshot<E>>,
-        //
         S: Handler<actix_raft::storage::InstallSnapshot<E>>,
-        // S::Context: ToEnvelope<S, actix_raft::storage::InstallSnapshot<E>>,
-        //
         S: Handler<actix_raft::storage::GetCurrentSnapshot<E>>,
-        // S::Context: ToEnvelope<S, actix_raft::storage::GetCurrentSnapshot<E>>,
 {
     id: NodeId,
     seed_members: Vec<NodeId>,
@@ -176,46 +157,52 @@ pub struct RaftBuilder<D, R, E, S>
     storage_factory: Option<Box<dyn StorageFactory<D, R, E, S>>>,
 }
 
+impl<D, R, E, S> std::fmt::Debug for RaftBuilder<D, R, E, S>
+where
+    D: AppData,
+    R: AppDataResponse,
+    E: AppError,
+    S: RaftStorage<D, R, E>,
+    S: std::fmt::Debug,
+    S: Handler<actix_raft::storage::GetInitialState<E>>,
+    S: Handler<actix_raft::storage::SaveHardState<E>>,
+    S: Handler<actix_raft::storage::GetLogEntries<D, E>>,
+    S: Handler<actix_raft::storage::AppendEntryToLog<D, E>>,
+    S: Handler<actix_raft::storage::ReplicateToLog<D, E>>,
+    S: Handler<actix_raft::storage::ApplyEntryToStateMachine<D, R, E>>,
+    S: Handler<actix_raft::storage::ReplicateToStateMachine<D, E>>,
+    S: Handler<actix_raft::storage::CreateSnapshot<E>>,
+    S: Handler<actix_raft::storage::InstallSnapshot<E>>,
+    S: Handler<actix_raft::storage::GetCurrentSnapshot<E>>,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "RaftBuilder(id:{:?}, seed_members:{:?}, is_network_set:{}, is_storage_factory_set:{}, configuration:{:?})",
+            self.id, self.seed_members, self.network.is_some(), self.storage_factory.is_some(), self.config
+        )
+    }
+}
+
 impl<D, R, E, S> RaftBuilder<D, R, E, S>
     where
         D: AppData,
         R: AppDataResponse,
         E: AppError,
 
-        // S: RaftStorage<D, R, E, Actor = S, Context = Context<S>>,
         S: RaftStorage<D, R, E>,
         S: std::fmt::Debug,
-        // S: Actor<Context = Context<S>>,
-        //
+
         S: Handler<actix_raft::storage::GetInitialState<E>>,
-        // S::Context: ToEnvelope<S, actix_raft::storage::GetInitialState<E>>,
-        //
         S: Handler<actix_raft::storage::SaveHardState<E>>,
-        // S::Context: ToEnvelope<S, actix_raft::storage::SaveHardState<E>>,
-        //
         S: Handler<actix_raft::storage::GetLogEntries<D, E>>,
-        // S::Context: ToEnvelope<S, actix_raft::storage::GetLogEntries<D, E>>,
-        //
         S: Handler<actix_raft::storage::AppendEntryToLog<D, E>>,
-        // S::Context: ToEnvelope<S, actix_raft::storage::AppendEntryToLog<D, E>>,
-        //
         S: Handler<actix_raft::storage::ReplicateToLog<D, E>>,
-        // S::Context: ToEnvelope<S, actix_raft::storage::ReplicateToLog<D, E>>,
-        //
         S: Handler<actix_raft::storage::ApplyEntryToStateMachine<D, R, E>>,
-        // S::Context: ToEnvelope<S, actix_raft::storage::ApplyEntryToStateMachine<D, R, E>>,
-        //
         S: Handler<actix_raft::storage::ReplicateToStateMachine<D, E>>,
-        // S::Context: ToEnvelope<S, actix_raft::storage::ReplicateToStateMachine<D, E>>,
-        //
         S: Handler<actix_raft::storage::CreateSnapshot<E>>,
-        // S::Context: ToEnvelope<S, actix_raft::storage::CreateSnapshot<E>>,
-        //
         S: Handler<actix_raft::storage::InstallSnapshot<E>>,
-        // S::Context: ToEnvelope<S, actix_raft::storage::InstallSnapshot<E>>,
-        //
         S: Handler<actix_raft::storage::GetCurrentSnapshot<E>>,
-        // S::Context: ToEnvelope<S, actix_raft::storage::GetCurrentSnapshot<E>>,
 {
     pub fn new(id: NodeId) -> RaftBuilder<D, R, E, S> {
         Self {
@@ -259,7 +246,7 @@ impl<D, R, E, S> RaftBuilder<D, R, E, S>
     }
 
     // #[tracing::instrument(skip(self))]
-    // pub fn build(&self) -> Result<Addr<Raft<D, R, E, S>>, ConfigurationError> {
+    #[tracing::instrument]
     pub fn build(&self) -> Result<RaftSystem<D, R, E, S>, RaftSystemError> {
         self.check_requirements()?;
 
@@ -277,63 +264,32 @@ impl<D, R, E, S> RaftBuilder<D, R, E, S>
         let metrics_recipient = network.clone().recipient();
 
         let raft = Raft::create(move |_| {
-            let r = Raft::new(
+            Raft::new(
                 host_id,
                 raft_config,
-                network,
+                host_network,
                 storage,
                 metrics_recipient,
-            );
-
-            r
+            )
         });
 
-        Ok(RaftSystem {
-            id: host_id,
-            raft,
-            network: host_network,
-            info: host_info,
-            configuration: c.clone(),
-        })
-
-        // match self.check_requirements() {
-        //     Ok(_) => {
-        //         let c = self.config.as_ref()?;
-        //         let raft_config = c.clone().into();
-        //
-        //         let host_id = self.id;
-        //
-        //         let host = c.host.clone();
-        //         let host_info = self.config.as_ref()?.seed_nodes.get(&host)?.clone();
-        //
-        //         let storage = self.storage_factory.as_ref()?.create();
-        //         let network = self.build_network_if_needed();
-        //         let host_network = network.clone();
-        //         let metrics_recipient = network.clone().recipient();
-        //
-        //         let raft = Raft::create(move |_| {
-        //             let r = Raft::new(
-        //                 host_id,
-        //                 raft_config,
-        //                 network,
-        //                 storage,
-        //                 metrics_recipient,
-        //             );
-        //
-        //             r
-        //         });
-        //
-        //         Ok(RaftSystem {
-        //             id: host_id,
-        //             raft,
-        //             network: host_network,
-        //             info: host_info,
-        //             configuration: c.clone(),
-        //         })
-        //     },
-        //
-        //     Err(err) => RaftSystemError::from(err),
-        // }
+        info!(network_id = host_id, "Registering Raft actor with host Network...");
+        network.send( RegisterRaft(raft.clone()))
+            .map_err( RaftSystemError::from)
+            .and_then(|res| {
+                info!(network_id = host_id, "Result of Raft registration: {:?}", res);
+                res.map_err(RaftSystemError::from)
+            })
+            .map(|_| {
+                RaftSystem {
+                    id: host_id,
+                    raft,
+                    network,
+                    info: host_info,
+                    configuration: c.clone(),
+                }
+            })
+            .wait()
     }
 
     fn check_requirements(&self) -> Result<(), ConfigurationError> {
@@ -369,3 +325,44 @@ impl<D, R, E, S> RaftBuilder<D, R, E, S>
             })
     }
 }
+
+// Ok()
+
+// match self.check_requirements() {
+//     Ok(_) => {
+//         let c = self.config.as_ref()?;
+//         let raft_config = c.clone().into();
+//
+//         let host_id = self.id;
+//
+//         let host = c.host.clone();
+//         let host_info = self.config.as_ref()?.seed_nodes.get(&host)?.clone();
+//
+//         let storage = self.storage_factory.as_ref()?.create();
+//         let network = self.build_network_if_needed();
+//         let host_network = network.clone();
+//         let metrics_recipient = network.clone().recipient();
+//
+//         let raft = Raft::create(move |_| {
+//             let r = Raft::new(
+//                 host_id,
+//                 raft_config,
+//                 network,
+//                 storage,
+//                 metrics_recipient,
+//             );
+//
+//             r
+//         });
+//
+//         Ok(RaftSystem {
+//             id: host_id,
+//             raft,
+//             network: host_network,
+//             info: host_info,
+//             configuration: c.clone(),
+//         })
+//     },
+//
+//     Err(err) => RaftSystemError::from(err),
+// }
