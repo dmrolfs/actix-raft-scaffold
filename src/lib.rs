@@ -1,6 +1,7 @@
 #![feature(try_trait)]
 
 use serde::{Serialize, Deserialize};
+use actix_raft::NodeId;
 
 // pub mod api {
 //     pub mod cluster {
@@ -10,7 +11,6 @@ use serde::{Serialize, Deserialize};
 
 // pub mod cluster;
 pub mod config;
-pub mod raft_system;
 pub mod fib;
 pub mod ports;
 pub mod network;
@@ -27,6 +27,10 @@ pub struct NodeInfo {
     pub cluster_address: String,
     pub app_address: String,
     pub public_address: String,
+}
+
+impl NodeInfo {
+    pub fn node_id(&self) -> NodeId { utils::generate_node_id(self.cluster_address.as_str()) }
 }
 
 impl Default for NodeInfo {

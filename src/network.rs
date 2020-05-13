@@ -17,7 +17,7 @@ use crate::{
     NodeInfo,
     ring::RingType,
     ports::{self, PortData},
-    utils,
+    // utils,
 };
 use state::*;
 use node::{
@@ -164,7 +164,7 @@ impl<D, R, E, S> Network<D, R, E, S>
         info!(network_id = self.id, "configuration:{:?}", c);
 
         for n in c.seed_nodes.values() {
-            let id = utils::generate_node_id(n.cluster_address.as_str());
+            let id = n.node_id();
             let node_ref = NodeRef {
                 id,
                 info: Some(n.clone()),
@@ -718,7 +718,7 @@ impl<D, R, E, S> Network<D, R, E, S>
                         } else if lref.info.is_some() {
                             NetworkError::NotLeader {
                                 leader_id: Some(lref.id),
-                                leader_address: lref.info.clone().map(|info| info.cluster_address.clone()),
+                                leader_address: lref.info.as_ref().map(|info| info.cluster_address.clone()),
                             }
                         } else {
                             NetworkError::Unknown(format!("Leader#{} actor is not registered.", lref.id))

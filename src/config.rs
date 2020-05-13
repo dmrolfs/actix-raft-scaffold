@@ -115,7 +115,7 @@ impl From<ConfigSchema> for Configuration {
             seed_nodes,
             max_discovery_timeout: Duration::seconds(schema.max_raft_init_timeout),   //   Duration::from_std(schema.max_discovery_timeout).unwrap(),
             max_raft_init_timeout: Duration::seconds(schema.max_raft_init_timeout),
-            election_timeout_min: Duration::milliseconds(schema.election_timeout_max),
+            election_timeout_min: Duration::milliseconds(schema.election_timeout_min),
             election_timeout_max: Duration::milliseconds(schema.election_timeout_max),
             heartbeat_interval: Duration::milliseconds(schema.heartbeat_interval),
             max_payload_entries: schema.max_payload_entries,
@@ -178,6 +178,15 @@ impl Configuration {
 
 impl Into<::actix_raft::Config> for Configuration {
     fn into(self) -> ::actix_raft::Config {
+        //todo: provide better feedback to snapshot_dir; e.g., does not exist
+        debug!("config snapshot_dir={:?}", self.snapshot_dir);
+        debug!("config election_timeout_min={:?}", self.election_timeout_min);
+        debug!("config election_timeout_min millis ={:?}", self.election_timeout_min.num_milliseconds());
+        debug!("config election_timeout_min millis as u16={:?}", self.election_timeout_min.num_milliseconds() as u16);
+        debug!("config election_timeout_max={:?}", self.election_timeout_max);
+        debug!("config election_timeout_max millis ={:?}", self.election_timeout_max.num_milliseconds());
+        debug!("config election_timeout_max millis as u16={:?}", self.election_timeout_max.num_milliseconds() as u16);
+
         ::actix_raft::Config::build(self.snapshot_dir.to_string_lossy().to_string())
             .election_timeout_min(self.election_timeout_min.num_milliseconds() as u16)
             .election_timeout_max(self.election_timeout_max.num_milliseconds() as u16)

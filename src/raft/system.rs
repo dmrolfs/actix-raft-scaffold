@@ -354,7 +354,7 @@ impl<D, R, E, S> RaftBuilder<D, R, E, S>
                 let c = self.config.as_ref().unwrap();
                 let ring = crate::ring::Ring::new(c.ring_replicas);
                 let host_info = c.host_info();
-                let host_id = crate::utils::generate_node_id(host_info.cluster_address.as_str());
+                let host_id = host_info.node_id();
 
                 let mut network = Network::new(
                     host_id,
