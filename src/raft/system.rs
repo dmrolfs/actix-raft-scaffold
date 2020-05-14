@@ -58,22 +58,6 @@ pub struct RaftSystem<D, R, E, S>
     pub configuration: Configuration,
 }
 
-impl<D, R, E, S> std::fmt::Debug for RaftSystem<D, R, E, S>
-    where
-        D: AppData,
-        R: AppDataResponse,
-        E: AppError,
-        S: RaftStorage<D, R, E>,
-{
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "System(id:{}, info:{:?}, configuration:{:?})",
-            self.id, self.info, self.configuration
-        )
-    }
-}
-
 impl<D, R, E, S> RaftSystem<D, R, E, S>
     where
         D: AppData,
@@ -126,6 +110,40 @@ impl<D, R, E, S> RaftSystem<D, R, E, S>
             .map_err(|err| RaftSystemError::MailboxError(err))
             .and_then(|res| { res.map_err(RaftSystemError::from) })
             .wait()
+    }
+}
+
+impl<D, R, E, S> std::fmt::Debug for RaftSystem<D, R, E, S>
+    where
+        D: AppData,
+        R: AppDataResponse,
+        E: AppError,
+        S: RaftStorage<D, R, E>,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "System(id:{}, info:{:?}, configuration:{:?})",
+            self.id, self.info, self.configuration
+        )
+    }
+}
+
+impl<D, R, E, S> std::clone::Clone for RaftSystem<D, R, E, S>
+    where
+        D: AppData,
+        R: AppDataResponse,
+        E: AppError,
+        S: RaftStorage<D, R, E>,
+{
+    fn clone(&self) -> Self {
+        Self {
+            id: self.id,
+            raft: self.raft.clone(),
+            network: self.network.clone(),
+            info: self.info.clone(),
+            configuration: self.configuration.clone(),
+        }
     }
 }
 
