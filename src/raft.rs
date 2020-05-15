@@ -4,7 +4,7 @@ use actix_raft::{
 };
 use crate::network::Network;
 
-pub use self::system::RaftBuilder;
+pub use self::system::RaftSystemBuilder;
 
 pub mod system;
 pub mod network;

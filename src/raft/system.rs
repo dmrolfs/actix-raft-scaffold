@@ -18,9 +18,13 @@ use crate::{
 };
 use std::option::NoneError;
 use crate::network::RegisterRaft;
+use actix_raft::admin::InitWithConfig;
 
 #[derive(Error, Debug)]
 pub enum RaftSystemError {
+    #[error("Raft initialization failed.")]
+    RaftInitializationError(#[from] actix_raft::admin::InitWithConfigError ),
+
     #[error("application system misconfigured")]
     Configuration(#[from] crate::ConfigurationError),
 
@@ -44,6 +48,10 @@ impl From<std::option::NoneError> for RaftSystemError {
     }
 }
 
+
+/////////////////////////////////////////////////////////////////////////
+// Raft System
+
 pub struct RaftSystem<D, R, E, S>
     where
         D: AppData,
@@ -65,50 +73,28 @@ impl<D, R, E, S> RaftSystem<D, R, E, S>
         E: AppError,
         S: RaftStorage<D, R, E>,
 {
-//     #[tracing::instrument]
-//     pub fn new() -> Result<RaftSystem<D, R, E, S>,  RaftSystemError> {
-//         let config = Configuration::load()?;
-//         info!("configuration = {:?}", config);
-//         // let config = match Configuration::load() {
-//         //     Ok(c) => c,
-//         //     Err(err) => {
-//         //         // return futures::failed( actix::MailboxError::Closed)
-//         //         return futures::failed(err.into())
-//         //     }
-//         // };
-//
-//         let ring = Ring::new(config.ring_replicas);
-//         let host_info = config.host_info();
-//         info!("Host node info:${:?}", host_info);
-//         let host_id = utils::generate_node_id(host_info.cluster_address.as_str());
-//
-//         let network_arb = Arbiter::new();
-//         // let d = config.discovery_host;
-//
-//         let mut cluster_network = Network::new(
-//             host_id,
-//             &host_info,
-//             ring,
-//             config.discovery_host,
-//         );
-//         cluster_network.configure_with(&config);
-//         let cluster_network_addr = Network::start_in_arbiter(&network_arb, |_| cluster_network);
-//
-//         Ok(RaftSystem {
-//             id: host_id,
-//             network: cluster_network_addr,
-//             configuration: config,
-//             info: host_info,
-//         })
-//     }
-
-    #[tracing::instrument]
-    // pub fn start(&self) -> Result<(), RaftSystemError> {
-    pub fn start(&self, data: PortData<D, R, E, S>) -> Result<(), RaftSystemError> {
-        self.network
-            .send( BindEndpoint::new(data))
-            .map_err(|err| RaftSystemError::MailboxError(err))
-            .and_then(|res| { res.map_err(RaftSystemError::from) })
+    #[tracing::instrument(skip(self))]
+    pub fn start(&self, seed_members: Vec<NodeId>) -> Result<(), RaftSystemError> {
+        // send via network?
+        self.raft.send( InitWithConfig::new(seed_members))
+            .map_err(|err| {
+                error!(
+                    network_id = self.id, error = ?err,
+                    "Actor send error during Raft initialization."
+                );
+                RaftSystemError::MailboxError(err)
+            })
+            .and_then(|res| {
+                res
+                    .map(|_| {
+                        info!(network_id = self.id, "Raft initialization completed.");
+                        ()
+                    })
+                    .map_err(|err| {
+                        error!(network_id = self.id, error = ?err, "Raft initialization failed.");
+                        RaftSystemError::from(err)
+                    })
+            })
             .wait()
     }
 }
@@ -148,7 +134,10 @@ impl<D, R, E, S> std::clone::Clone for RaftSystem<D, R, E, S>
 }
 
 
-pub struct RaftBuilder<D, R, E, S>
+/////////////////////////////////////////////////////////////////////////
+// Raft System Builder
+
+pub struct RaftSystemBuilder<D, R, E, S>
     where
         D: AppData,
         R: AppDataResponse,
@@ -169,13 +158,13 @@ pub struct RaftBuilder<D, R, E, S>
         S: Handler<actix_raft::storage::GetCurrentSnapshot<E>>,
 {
     id: NodeId,
-    seed_members: Vec<NodeId>,
     network: Option<Addr<Network<D, R, E, S>>>,
     config: Option<Configuration>,
     storage_factory: Option<Box<dyn StorageFactory<D, R, E, S>>>,
+    server_data: Option<PortData<D, R, E, S>>,
 }
 
-impl<D, R, E, S> std::fmt::Debug for RaftBuilder<D, R, E, S>
+impl<D, R, E, S> std::fmt::Debug for RaftSystemBuilder<D, R, E, S>
 where
     D: AppData,
     R: AppDataResponse,
@@ -196,13 +185,15 @@ where
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "RaftBuilder(id:{:?}, seed_members:{:?}, is_network_set:{}, is_storage_factory_set:{}, configuration:{:?})",
-            self.id, self.seed_members, self.network.is_some(), self.storage_factory.is_some(), self.config
+            "RaftBuilder(id:{:?}, is_network_set:{}, is_storage_factory_set:{}, is_server_data_set:{}, configuration:{:?})",
+            self.id,
+            self.network.is_some(), self.storage_factory.is_some(), self.server_data.is_some(),
+            self.config
         )
     }
 }
 
-impl<D, R, E, S> RaftBuilder<D, R, E, S>
+impl<D, R, E, S> RaftSystemBuilder<D, R, E, S>
     where
         D: AppData,
         R: AppDataResponse,
@@ -222,24 +213,14 @@ impl<D, R, E, S> RaftBuilder<D, R, E, S>
         S: Handler<actix_raft::storage::InstallSnapshot<E>>,
         S: Handler<actix_raft::storage::GetCurrentSnapshot<E>>,
 {
-    pub fn new(id: NodeId) -> RaftBuilder<D, R, E, S> {
+    pub fn new(id: NodeId) -> RaftSystemBuilder<D, R, E, S> {
         Self {
             id,
-            seed_members: Vec::new(),
             network: None,
             config: None,
             storage_factory: None,
+            server_data: None,
         }
-    }
-
-    pub fn with_seed_members(&mut self, seed_members: &Vec<NodeId>) -> &mut Self {
-        self.seed_members = seed_members.clone();
-        self
-    }
-
-    pub fn push_seed_member(&mut self, seed_member: NodeId) -> &mut Self {
-        self.seed_members.push(seed_member);
-        self
     }
 
     pub fn with_configuration(&mut self, config: &Configuration) -> &mut Self {
@@ -263,54 +244,141 @@ impl<D, R, E, S> RaftBuilder<D, R, E, S>
         self
     }
 
-    // #[tracing::instrument(skip(self))]
+    //todo: generalize to consider how to incorporate application concerns beywond raft admin
+    // current thinking is separate endpoint for app, so this binding would be for raft system only.
+    // todo: even needed since network is provided or created?
+    pub fn bind_with( &mut self, server_data: PortData<D, R, E, S>) -> &mut Self {
+        self.server_data = Some(server_data);
+        self
+    }
+
     #[tracing::instrument]
     pub fn build(&self) -> Result<RaftSystem<D, R, E, S>, RaftSystemError> {
         self.check_requirements()?;
 
         let c = self.config.as_ref()?;
-        let raft_config = c.clone().into();
-
+        let network = self.build_network_if_needed();
+        let network2 = network.clone();
+        let raft = self.build_raft(network.clone())?;
+        let raft2 = raft.clone();
         let host_id = self.id;
 
-        let host = c.host.clone();
-        let host_info = self.config.as_ref()?.seed_nodes.get(&host)?.clone();
+        debug!("Binding raft endpoint...");
+        let system = self.bind_raft_endpoint(&network)
+            .and_then(move |_| {
+                debug!("Raft endpoint binding completed. Registering raft system with network...");
+                self.register_raft_with_network(&network2, &raft2)
+            })
+            .and_then(move |_| {
+                let host = c.host.clone();
+                let host_info = self.config.as_ref()?.seed_nodes.get(&host)?.clone();
 
-        let storage = self.storage_factory.as_ref()?.create();
-        let network = self.build_network_if_needed();
-        let host_network = network.clone();
+                Ok(
+                    RaftSystem {
+                        id: host_id,
+                        raft,
+                        network,
+                        info: host_info,
+                        configuration: c.clone(),
+                    }
+                )
+            })
+            .wait();
+
+        debug!("Raft registration complete: {:?}", system);
+        system
+    }
+
+    #[tracing::instrument(skip(self, network))]
+    fn build_raft(
+        &self,
+        network: Addr<Network<D, R, E, S>>
+    ) -> Result<Addr<Raft<D, R, E, S>>, RaftSystemError> {
+        let c = self.config.as_ref()?;
+        let raft_config = c.clone().into();
         let metrics_recipient = network.clone().recipient();
+        let storage = self.storage_factory.as_ref()?.create();
+        let host_id = self.id;
 
-        let raft = Raft::create(move |_| {
+        Ok(Raft::create(move |_| {
             Raft::new(
                 host_id,
                 raft_config,
-                host_network,
+                network,
                 storage,
                 metrics_recipient,
             )
-        });
+        }))
+    }
 
+    #[tracing::instrument(skip(self, network, raft))]
+    fn register_raft_with_network(
+        &self,
+        network: &Addr<Network<D, R, E, S>>,
+        raft: &Addr<Raft<D, R, E, S>>
+    ) -> impl Future<Item = (), Error = RaftSystemError> {
+        let host_id = self.id;
         info!(network_id = host_id, "Registering Raft actor with host Network...");
         network.send( RegisterRaft(raft.clone()))
             .map_err( RaftSystemError::from)
-            .and_then(|res| {
+            .and_then(move |res| {
                 info!(network_id = host_id, "Result of Raft registration: {:?}", res);
                 res.map_err(RaftSystemError::from)
             })
-            .map(|_| {
-                RaftSystem {
-                    id: host_id,
-                    raft,
-                    network,
-                    info: host_info,
-                    configuration: c.clone(),
-                }
+    }
+
+    #[tracing::instrument(skip(self, network))]
+    fn bind_raft_endpoint(
+        &self,
+        network: &Addr<Network<D, R, E, S>>
+    ) -> impl Future<Item = (), Error = RaftSystemError> {
+        let host_id = self.id;
+        let data = self.server_data.as_ref()
+            .map(|data| data.clone())
+            .unwrap_or_else(move || {
+            info!(network_id = host_id, "no Raft port data provided, using default.");
+            let fib_act = crate::fib::FibActor::new();
+            let fib_addr = fib_act.start();
+
+            PortData {
+                network: network.clone(),
+                fib: fib_addr,
+            }
+        });
+
+        info!(
+            network_id = self.id,
+            endpoint_address = self.config.as_ref().unwrap().seed_nodes.get(&(self.config.as_ref().unwrap().host)).unwrap().cluster_address.as_str(),
+            "Binding raft service endpoint..."
+        );
+
+        let network2 = network.clone();
+
+        // debug!("entering delay...");
+        // tokio::run(
+        //     tokio::timer::Delay::new(std::time::Instant::now() + std::time::Duration::from_millis(1))
+        //         .map_err(move |err| {
+        //             error!(network_id = host_id, error = ?err, "Error in delay.");
+        //             ()
+        //         })
+        // );
+        // debug!("... exiting delay");
+
+        network2.send(BindEndpoint::new(data))
+            .map_err(|err| RaftSystemError::MailboxError(err))
+            .and_then(move |res| {
+                debug!(network_id = host_id, "Raft endpoint binding complete.");
+                res.map_err(RaftSystemError::from)
             })
-            .wait()
     }
 
     fn check_requirements(&self) -> Result<(), ConfigurationError> {
+        if self.config.is_none() {
+            return Err(ConfigurationError::Unknown(
+                "No means to configuration Raft system was provided".to_string()
+            ));
+        }
+
         if self.storage_factory.is_none() {
             return Err(ConfigurationError::Unknown(
                 "No means to build RaftStorage was provided".to_string()

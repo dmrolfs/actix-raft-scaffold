@@ -755,7 +755,7 @@ impl<D, R, E, S> Network<D, R, E, S>
         fut::result(
             match self.leader_ref() {
                 Some(NodeRef{ id, info: _, addr}) if id == &self.id && addr.is_some() => {
-                    debug!(network_id = self.id, "Network's node is leader delegate.");
+                    debug!(network_id = self.id, "Network's node is LEADER.");
                     Ok(addr.clone().unwrap())
                 },
 
@@ -969,18 +969,46 @@ impl<D, R, E, S> Handler<ConnectNode> for Network<D, R, E, S>
                     let change_cluster_command = ChangeClusterConfig::new_to_add(vec!(command.id));
 
                     network.delegate_to_leader(change_cluster_command, ctx)
-                        .then(move |res, _, _| {
+                        .then(move |res, n, _| {
                             fut::result(
                                 match res {
-                                    Ok(_) => Ok(ConnectionAcknowledged {}),
+                                    Ok(_) => {
+                                        info!(
+                                            network_if = n.id,
+                                            "Node connection and cluster change ackd by leader."
+                                        );
+
+                                        Ok(ConnectionAcknowledged {})
+                                    },
+
                                     Err(NetworkError::NotLeader{leader_id: _, leader_address: _}) => {
+                                        info!(
+                                            network_if = n.id,
+                                            "Node connection ackd but host is not leader."
+                                        );
+
                                         //todo: finalize how to handle not leader
                                         Ok(ConnectionAcknowledged {})
                                     },
+
                                     Err(NetworkError::NoElectedLeader) => {
+                                        info!(
+                                            network_if = n.id,
+                                            "Node connection ackd but there is no elected leader."
+                                        );
+
                                         Ok(ConnectionAcknowledged {})
                                     },
-                                    Err(err) => Err(err),
+
+                                    Err(err) => {
+                                        error!(
+                                            network_id = n.id,
+                                            error = ?err,
+                                            "cluster change delegation failed by leader."
+                                        );
+
+                                        Err(err)
+                                    },
                                 }
                             )
                         })

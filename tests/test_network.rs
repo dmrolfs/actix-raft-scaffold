@@ -21,7 +21,7 @@ use actix_raft_scaffold::{
     network::state::{Extent, Status},
     config::Configuration,
     ports::{PortData, http::entities},
-    raft::RaftBuilder,
+    raft::RaftSystemBuilder,
     fib::FibActor,
 };
 
@@ -35,6 +35,7 @@ use actix_raft_scaffold::{
     storage::StorageFactory,
     raft::system::RaftSystem,
 };
+use actix_raft_scaffold::network::messages::NetworkError::NetworkBindError;
 
 
 const NODE_A_ADDRESS: &str = "127.0.0.1:8000";
@@ -114,6 +115,7 @@ fn make_test_network(node_info: &NodeInfo) -> TestNetwork {
     Network::new(node_id, node_info, ring, discovery)
 }
 
+#[tracing::instrument]
 fn make_test_configuration<S>(host: S, nodes: Vec<&NodeInfo>) -> Configuration
 where
     S: AsRef<str> + std::fmt::Debug,
@@ -128,7 +130,7 @@ where
     c.set("election_timeout_max", 300).unwrap();
     c.set("heartbeat_interval", 50).unwrap();
     c.set("max_payload_entries", 300).unwrap();
-    c.set("metrics_rate", 5).unwrap();
+    c.set("metrics_rate", 25).unwrap();
     c.set("snapshot_dir", "data/snapshots/").unwrap();
     c.set("snapshot_max_chunk_size", 3_145_728).unwrap();
 
@@ -294,7 +296,7 @@ fn test_network_builder() {
         .with_configuration(&config)
         .collect();
 
-    let system = RaftBuilder::new(local_id)
+    let system = RaftSystemBuilder::new(local_id)
         .with_configuration(&config)
         .with_storage_factory(storage_factory)
         .build()
@@ -384,119 +386,98 @@ fn test_network_bind() {
     // let nb_mock = mock("POST", b_path.as_str()).expect(1).create();
     let raft_mock = mock("POST", "/api/cluster/admin").expect(0).create();
 
-    {
-        let s = span!(Level::INFO, "build_network");
-        let _ = s.enter();
+    let s = span!(Level::INFO, "build_network");
+    let _ = s.enter();
 
-        let storage_factory = MemoryStorageFactory::new()
-            .with_members(seed_members)
-            .with_configuration(&config)
-            .collect();
+    let storage_factory = MemoryStorageFactory::new()
+        .with_members(seed_members)
+        .with_configuration(&config)
+        .collect();
 
-        let system = RaftBuilder::new(node_a.node_id())
-            .with_configuration(&config)
-            .with_storage_factory(storage_factory)
-            .build()
-            .unwrap();
+    let system = RaftSystemBuilder::new(node_a.node_id())
+        .with_configuration(&config)
+        .with_storage_factory(storage_factory)
+        .build()
+        .unwrap();
 
-        let fib_act = FibActor::new();
-        let fib_addr = fib_act.start();
+    let network2 = system.network.clone();
 
-        let data = PortData {
-            fib: fib_addr,
-            network: system.network.clone(),
-        };
+    let test =  Delay::new(Instant::now() + Duration::from_millis(50))
+        .map_err(|err| { panic!(err) })
+        .and_then(move |_| {
+            network2.send(GetClusterSummary)
+                .map_err(|err| {
+                    error!("error in get cluster summary: {:?}", err);
+                    panic!(err)
+                })
+                .and_then(move |res| {
+                    let s = span!(Level::INFO, "assert_results");
+                    let _ = s.enter();
 
-        let network2 = system.network.clone();
+                    let actual = res.unwrap();
+                    info!("B: actual cluster summary:{:?}", actual);
 
-        let test = system.network.send(BindEndpoint::new(data))
-            .map_err(|err| {
-                error!("error in bind: {:?}", err);
-                panic!(err)
-            })
-            .and_then( |_| {
-                Delay::new(Instant::now() + Duration::from_millis(50))
-                    .map_err(|err| { panic!(err) })
-            })
-            .and_then( move |_| {
-                network2.send(GetClusterSummary)
-            })
-            .map_err(|err| {
-                error!("error in get cluster summary: {:?}", err);
-                panic!(err)
-            })
-            .and_then(move |res| {
-                let s = span!(Level::INFO, "assert_results");
-                let _ = s.enter();
+                    info!("actual.id: {:?}", actual.id);
+                    assert_eq!(actual.id, utils::generate_node_id("127.0.0.1:8000"));
 
-                let actual = res.unwrap();
-                info!("B: actual cluster summary:{:?}", actual);
+                    info!("actual.info: {:?}", actual.info);
+                    assert_eq!(actual.info, node_a);
 
-                info!("actual.id: {:?}", actual.id);
-                assert_eq!(actual.id, utils::generate_node_id("127.0.0.1:8000"));
+                    info!("actual.isolated_nodes: {:?}", actual.state.isolated_nodes());
+                    assert_eq!(actual.state.isolated_nodes().is_empty(), true);
 
-                info!("actual.info: {:?}", actual.info);
-                assert_eq!(actual.info, node_a);
+                    // Still in Joining since move to WeaklyUp dependent on
+                    // RAFT cluster change msg from leader
+                    info!("actual.state: {:?}", actual.state);
+                    assert_eq!(actual.state.unwrap(), Status::Joining);
 
-                info!("actual.isolated_nodes: {:?}", actual.state.isolated_nodes());
-                assert_eq!(actual.state.isolated_nodes().is_empty(), true);
+                    info!("actual.connected_nodes: {:?}", actual.state.connected_nodes());
+                    info!("actual.state.extent: {:?}", actual.state.extent());
+                    // assert_eq!(actual.state.extent, Extent::Initialized); //todo bad
+                    assert_eq!(actual.state.extent(), Extent::Cluster);
 
-                // Still in Joining since move to WeaklyUp dependent on
-                // RAFT cluster change msg from leader
-                info!("actual.state: {:?}", actual.state);
-                assert_eq!(actual.state.unwrap(), Status::Joining);
+                    info!("[{:?}] actual.connected_nodes: {:?}", actual.id, actual.state.connected_nodes());
+                    // assert_eq!(actual.connected_nodes.len(), 0); //todo bad
+                    assert_eq!(actual.state.connected_nodes().len(), 2);
 
-                info!("actual.connected_nodes: {:?}", actual.state.connected_nodes());
-                info!("actual.state.extent: {:?}", actual.state.extent());
-                // assert_eq!(actual.state.extent, Extent::Initialized); //todo bad
-                assert_eq!(actual.state.extent(), Extent::Cluster);
+                    assert!(actual.metrics.is_some(), "raft metrics");
+                    let a_metrics = actual.metrics.unwrap();
+                    assert_eq!(a_metrics.id, actual.id);
+                    assert_eq!(a_metrics.last_log_index, 0);
+                    assert_eq!(a_metrics.current_term, 0);
+                    assert_eq!(a_metrics.state, RaftState::Follower);
+                    assert_eq!(a_metrics.current_leader, None);
+                    assert_eq!(a_metrics.last_applied, 0);
 
-                info!("[{:?}] actual.connected_nodes: {:?}", actual.id ,actual.state.connected_nodes());
-                // assert_eq!(actual.connected_nodes.len(), 0); //todo bad
-                assert_eq!(actual.state.connected_nodes().len(), 2);
+                    let e_membership = actix_raft::messages::MembershipConfig {
+                        is_in_joint_consensus: false,
+                        members: expected_members.clone(),
+                        non_voters: Vec::new(),
+                        removing: Vec::new(),
+                    };
+                    assert_eq!(a_metrics.membership_config, e_membership);
 
-                assert!(actual.metrics.is_some(), "raft metrics");
-                let a_metrics = actual.metrics.unwrap();
-                assert_eq!(a_metrics.id, actual.id);
-                assert_eq!(a_metrics.last_log_index, 0);
-                assert_eq!(a_metrics.current_term, 0);
-                assert_eq!(a_metrics.state, RaftState::Follower);
-                assert_eq!(a_metrics.current_leader, None);
-                assert_eq!(a_metrics.last_applied, 0);
+                    Ok(())
+                })
+                .then(|res| {
+                    let s = span!(Level::INFO, "clean_up");
+                    let _ = s.enter();
 
-                let e_membership = actix_raft::messages::MembershipConfig {
-                    is_in_joint_consensus: false,
-                    members: expected_members.clone(),
-                    non_voters: Vec::new(),
-                    removing: Vec::new(),
-                };
-                assert_eq!(a_metrics.membership_config, e_membership);
-
-                Ok(())
-            })
-            .then(|res| {
-                let s = span!(Level::INFO, "clean_up");
-                let _ = s.enter();
-
-                info!("test finished -- wrapping up");
-                actix::System::current().stop();
-                res
-            });
-// ;
-        info!("#### BEFORE BLOCK...");
-        // System::current().stop_on_panic();
-        // sys.block_on(test);
-        // info!("#### ... AFTER BLOCK");
-        spawn(test);
-
-        assert!(sys.run().is_ok(), "error during test");
-    }
+                    info!("test finished -- wrapping up");
+                    actix::System::current().stop();
+                    res
+                })
+        });
 
     let s = span!(Level::INFO, "assert_mock");
     let _ = s.enter();
     info!("ASSERTING MOCK service: {:?}", node_connect_mock);
     node_connect_mock.assert();
     raft_mock.assert();
+
+    info!("#### BEFORE BLOCK...");
+    spawn(test);
+    assert!(sys.run().is_ok(), "error during test");
 }
 
 struct ConnectNodePrep<D, R, E, S>
@@ -538,92 +519,62 @@ where
 }
 
 #[tracing::instrument]
-fn create_and_bind_network() ->
+fn create_and_bind_network(
+    host_id: NodeId,
+    members: HashMap<NodeId, NodeInfo>,
+    config: &Configuration
+) ->
     (
         ConnectNodePrep<Data, Response, Error, Storage>,
         impl Future<Item = ClusterSummary, Error = NetworkError>
     )
 {
-    let node_a = make_node_a("[::1]:8888".parse().unwrap());
-    let node_a_1 = node_a.clone();
-    let node_b = make_node_b(server_address());
-    let config = make_test_configuration("node_a", vec![&node_a, &node_b]);
-
-    let node_b_id = node_b.node_id();
-    let b_path_exp = format!("/api/cluster/nodes/{}", node_b_id);
-    info!("mock b path = {}", b_path_exp);
-
+    let member_ids = members.keys().map(|k| *k).collect();
     let storage_factory = MemoryStorageFactory::new()
-        .with_members(vec![node_a.node_id(), node_b.node_id()])
-        .with_configuration(&config)
+        .with_members(member_ids)
+        .with_configuration(config)
         .collect();
 
-    let system = RaftBuilder::new(node_a.node_id())
-        .with_configuration(&config)
+    let system = RaftSystemBuilder::new(host_id)
+        .with_configuration(config)
         .with_storage_factory(storage_factory)
         .build()
         .unwrap();
 
-    let network_addr = system.network.clone();
-    let n1 = network_addr.clone();
+    debug!("getting summary...");
+    let network = system.network.clone();
 
-    let fib_act = FibActor::new();
-    let fib_addr = fib_act.start();
+    let expected_host_info = members.get(&host_id).unwrap().clone();
 
-    let data = PortData {
-        fib: fib_addr,
-        network: network_addr.clone(),
-    };
-
-    debug!("binding networkk...");
-    let task = network_addr.send( BindEndpoint::new(data))
-        .map_err(|err| {
-            error!("error in bind:{:?}", err);
-            panic!(err)
-        })
-        .and_then( |_| {
-            debug!("delaying for a sec...");
-            Delay::new( Instant::now() + Duration::from_millis(50)).map_err(|err| panic!(err))
-        })
+    let task = Delay::new(Instant::now() + Duration::from_millis(50))
+        .map_err(|err| {panic!(err)})
         .and_then(move |_| {
-            debug!("getting summary...");
-            n1.send(GetClusterSummary).from_err()
-        })
-        // .from_err()
-        .and_then(move |summary| {
-            info!("baseline summary:{:?}", summary);
-            let actual = summary.unwrap();
-            assert_eq!(actual.id, utils::generate_node_id("[::1]:8888"));
-            assert_eq!(actual.info, node_a_1);
-            assert_eq!(actual.state.isolated_nodes().is_empty(), true);
-            assert_eq!(actual.state.unwrap(), Status::Joining);
-            assert_eq!(actual.state.extent(), Extent::Cluster);
-            assert_eq!(actual.state.connected_nodes().len(), 2);
-            debug!("actual.metrics = {:?}", actual.metrics);
-            assert!(actual.metrics.is_some(), "raft metrics");
-            let a_metrics = actual.metrics.as_ref().unwrap();
-            assert_eq!(a_metrics.id, actual.id);
-            assert_eq!(a_metrics.last_log_index, 0);
-            assert_eq!(a_metrics.current_term, 0);
-            assert_eq!(a_metrics.state, RaftState::Follower);
-            assert_eq!(a_metrics.current_leader, None);
-            assert_eq!(a_metrics.last_applied, 0);
-            debug!("wrapping it up...");
-            futures::future::ok::<ClusterSummary, NetworkError>(actual)
+            network.send(GetClusterSummary)
+                .from_err()
+                .and_then(move |summary| {
+                    info!("baseline summary:{:?}", summary);
+                    let actual = summary.unwrap();
+                    assert_eq!(actual.id, utils::generate_node_id("[::1]:8888"));
+                    assert_eq!(actual.info, expected_host_info);
+                    assert_eq!(actual.state.isolated_nodes().is_empty(), true);
+                    assert_eq!(actual.state.unwrap(), Status::Joining);
+                    assert_eq!(actual.state.extent(), Extent::Cluster);
+                    assert_eq!(actual.state.connected_nodes().len(), 2);
+                    debug!("actual.metrics = {:?}", actual.metrics);
+                    assert!(actual.metrics.is_some(), "raft metrics");
+                    let a_metrics = actual.metrics.as_ref().unwrap();
+                    assert_eq!(a_metrics.id, actual.id);
+                    assert_eq!(a_metrics.last_log_index, 0);
+                    assert_eq!(a_metrics.current_term, 0);
+                    assert_eq!(a_metrics.state, RaftState::Follower);
+                    assert_eq!(a_metrics.current_leader, None);
+                    assert_eq!(a_metrics.last_applied, 0);
+                    debug!("wrapping it up...");
+                    futures::future::ok::<ClusterSummary, NetworkError>(actual)
+                })
         });
 
-    let node_a_id = node_a.node_id();
-    let node_b_id = node_b.node_id();
-    let mut members = HashMap::new();
-    members.insert(node_a_id, node_a);
-    members.insert(node_b_id, node_b);
-
-    let prep = ConnectNodePrep {
-        system,
-        network_id: node_a_id,
-        members,
-    };
-
+    let prep = ConnectNodePrep { system, network_id: host_id, members, };
     (prep, task)
 }
 
@@ -649,14 +600,19 @@ fn test_network_cmd_connect_node_no_leader() {
 
     let sys = System::builder().stop_on_panic(true).name("test-handle-connect").build();
 
-    let (prep, prep_task) = create_and_bind_network();
-    // let n2 = prep.network.clone();
+    let node_a = make_node_a("[::1]:8888".parse().unwrap());
+    let node_a_1 = node_a.clone();
+    let node_b = make_node_b(server_address());
+    let config = make_test_configuration("node_a", vec![&node_a, &node_b]);
 
-    let (node_b_id, node_b_info) = prep.members.iter().find(|id_info| {
-        (*id_info).0 != &prep.network_id
-    })
-        .map(|id_info|  (*id_info.0, id_info.1.clone()))
-        .unwrap();
+    let node_a_id = node_a.node_id();
+    let node_b_id = node_b.node_id();
+    let mut members = HashMap::new();
+    members.insert(node_a_id, node_a.clone());
+    members.insert(node_b_id, node_b.clone());
+
+    let b_path_exp = format!("/api/cluster/nodes/{}", node_b_id);
+    info!("mock b path = {}", b_path_exp);
 
     let b_path_exp = format!("/api/cluster/nodes/{}", node_b_id);
     info!("mock b path = {}", b_path_exp);
@@ -678,11 +634,22 @@ fn test_network_cmd_connect_node_no_leader() {
 
     let raft_mock = mock("POST", "/api/cluster/admin").expect(0).create();
 
+    let (prep, prep_task) = create_and_bind_network(node_a_id, members, &config);
+    // let n2 = prep.network.clone();
+
+    // let (node_b_id, node_b_info) = prep.members.iter().find(|id_info| {
+    //     (*id_info).0 != &prep.network_id
+    // })
+    //     .map(|id_info|  (*id_info.0, id_info.1.clone()))
+    //     .unwrap();
+
     let network_1 = prep.network();
     let network_2 = prep.network();
-    let task = prep_task.and_then(move |_summary| {
+    let node_b_1 = node_b.clone();
+    let task = prep_task
+        .and_then(move |_summary| {
         debug!("ConnectNode#{} but there is no leader...", node_b_id);
-        network_1.send(ConnectNode{id: node_b_id, info: node_b_info.clone()}).from_err()
+        network_1.send(ConnectNode{id: node_b_id, info: node_b_1}).from_err()
     })
         .and_then(move |_ack| {
             network_2.send(GetClusterSummary).from_err()
@@ -732,14 +699,16 @@ fn test_network_cmd_connect_node_change_info() {
 
     let sys = System::builder().stop_on_panic(true).name("test-handle-connect").build();
 
-    let (prep, prep_task) = create_and_bind_network();
-    // let n2 = prep.network.clone();
+    let node_a = make_node_a("[::1]:8888".parse().unwrap());
+    let node_a_1 = node_a.clone();
+    let node_b = make_node_b(server_address());
+    let config = make_test_configuration("node_a", vec![&node_a, &node_b]);
 
-    let (node_b_id, node_b_info) = prep.members.iter().find(|id_info| {
-        (*id_info).0 != &prep.network_id
-    })
-        .map(|id_info|  (*id_info.0, id_info.1.clone()))
-        .unwrap();
+    let node_a_id = node_a.node_id();
+    let node_b_id = node_b.node_id();
+    let mut members = HashMap::new();
+    members.insert(node_a_id, node_a.clone());
+    members.insert(node_b_id, node_b.clone());
 
     let b_path_exp = format!("/api/cluster/nodes/{}", node_b_id);
     info!("mock b path = {}", b_path_exp);
@@ -761,16 +730,26 @@ fn test_network_cmd_connect_node_change_info() {
 
     let raft_mock = mock("POST", "/api/cluster/admin").expect(0).create();
 
-    let network_1 = prep.network().clone();
-    let network_2 = prep.network().clone();
-    let network_3 = prep.network().clone();
+    let (prep, prep_task) = create_and_bind_network(node_a_id, members, &config);
+    // let n2 = prep.network.clone();
 
-    let mut changed_node_b = node_b_info.clone();
+    // let (node_b_id, node_b_info) = prep.members.iter().find(|id_info| {
+    //     (*id_info).0 != &prep.network_id
+    // })
+    //     .map(|id_info|  (*id_info.0, id_info.1.clone()))
+    //     .unwrap();
+
+    let network_1 = prep.network();
+    let network_2 = prep.network();
+    let network_3 = prep.network();
+
+    let mut changed_node_b = node_b.clone();
     changed_node_b.name = "new-node-b".to_string();
     let changed_node_b_expected = changed_node_b.clone();
 
     let task = prep_task.and_then(move |_summary| {
         // change node_b info on connect
+        debug!("ConnectNode#{} will change node_b info, but there is no leader...", node_b_id);
         network_1.send(ConnectNode{id: node_b_id, info: changed_node_b}).from_err()
     })
         .and_then(move |_ack| {
@@ -786,7 +765,15 @@ fn test_network_cmd_connect_node_change_info() {
             assert_eq!(actual.state.unwrap(), Status::Joining);
             assert_eq!(actual.state.extent(), Extent::Cluster);
             assert_eq!(actual.state.connected_nodes().len(), 2);
-            debug_assert!(actual.metrics.is_none(), "no raft metrics");
+            assert!(actual.metrics.is_some(), "raft metrics");
+            let a_metrics = actual.metrics.as_ref().unwrap();
+            assert_eq!(a_metrics.id, actual.id);
+            assert_eq!(a_metrics.last_log_index, 0);
+            assert_eq!(a_metrics.current_term, 0);
+            assert_eq!(a_metrics.state, RaftState::Follower);
+            assert_eq!(a_metrics.current_leader, None);
+            assert_eq!(a_metrics.last_applied, 0);
+            debug!("wrapping it up with node change verify...");
 
             network_3.send( GetNode::for_id(node_b_id)).from_err()
         })
@@ -821,15 +808,17 @@ fn test_network_cmd_connect_node_leader() {
 
     let sys = System::builder().stop_on_panic(true).name("test-handle-connect").build();
 
-    let (prep, prep_task) = create_and_bind_network();
+    let node_a = make_node_a("[::1]:8888".parse().unwrap());
+    let node_a_1 = node_a.clone();
+    let node_b = make_node_b(server_address());
+    let config = make_test_configuration("node_a", vec![&node_a, &node_b]);
 
-    let (node_b_id, node_b_info) = prep.members.iter().find(|id_info| {
-        (*id_info).0 != &prep.network_id
-    })
-        .map(|id_info|  (*id_info.0, id_info.1.clone()))
-        .unwrap();
+    let node_a_id = node_a.node_id();
+    let node_b_id = node_b.node_id();
+    let mut members = HashMap::new();
+    members.insert(node_a_id, node_a.clone());
+    members.insert(node_b_id, node_b.clone());
 
-    let node_a_info = prep.members.get(&prep.network_id).unwrap().clone();
     let b_path_exp = format!("/api/cluster/nodes/{}", node_b_id);
     info!("mock b path = {}", b_path_exp);
     let b_connect_response = entities::RaftProtocolResponse {
@@ -850,34 +839,74 @@ fn test_network_cmd_connect_node_leader() {
 
     let raft_mock = mock("POST", "/api/cluster/admin").expect(0).create();
 
-    let network_1 = prep.network().clone();
-    let network_2 = prep.network().clone();
-    let network_3 = prep.network().clone();
+
+    let (prep, prep_task) = create_and_bind_network(node_a_id, members, &config);
+
+    // let (node_b_id, node_b_info) = prep.members.iter().find(|id_info| {
+    //     (*id_info).0 != &prep.network_id
+    // })
+    //     .map(|id_info|  (*id_info.0, id_info.1.clone()))
+    //     .unwrap();
+
+    // let node_a_info = prep.members.get(&prep.network_id).unwrap().clone();
+    // let node_a_id = node_a_info.node_id();
+
+    let network_1 = prep.network();
+    let network_2 = prep.network();
+    let network_3 = prep.network();
     let prep_1 = prep.clone();
+    let node_b_1 = node_b.clone();
 
     let task = prep_task.and_then(move |_summary| {
         let members = prep_1.members.keys().map(|k| *k).collect();
+        info!("Starting RaftSystem...");
+        prep_1.system.start(members)
+            .map_err(|err| {
+                error!(error = ?err, "Raft InitWithConfig failure.");
+                panic!("Raft InitWithConfig failure: {:?}", err);
+            })
+            .map(|_| info!("Raft init succeeded!!"))
 
-        let change_leader = RaftMetrics {
-            id: prep_1.network_id,
-            state: actix_raft::metrics::State::Leader,
-            current_term: 1,
-            last_log_index: 1,
-            last_applied: 1,
-            current_leader: Some(prep_1.network_id),
-            membership_config: actix_raft::messages::MembershipConfig {
-                is_in_joint_consensus: true,
-                members,
-                non_voters: Vec::new(),
-                removing: Vec::new(),
-            },
-        };
+        // let cmd = actix_raft::admin::InitWithConfig::new(members);
+        // prep.system.raft.send(cmd)
+        //     .map_err(|err| {
+        //         error!(error = ?err, "Raft init failed in actor call");
+        //         panic!("Raft init failed in actor call!");
+        //     })
+        //     .and_then(|res| {
+        //         match res {
+        //             Ok(_) => info!("Raft init succeeded!!"),
+        //             Err(err) => {
+        //                 error!(error = ?err, "Raft InitWithConfig failure.");
+        //                 panic!("Raft InitWithConfig failure: {:?}", err);
+        //             },
+        //         }
+        //
+        //         res.map_err(|err| NetworkError::Unknown(err.to_string()))
+        //     })
 
-        info!("send change in leader to network...");
-        network_1.send(change_leader).from_err()
+
+        // let change_leader = RaftMetrics {
+        //     id: prep_1.network_id,
+        //     state: actix_raft::metrics::State::Leader,
+        //     current_term: 1,
+        //     last_log_index: 1,
+        //     last_applied: 1,
+        //     current_leader: Some(prep_1.network_id),
+        //     membership_config: actix_raft::messages::MembershipConfig {
+        //         is_in_joint_consensus: true,
+        //         members,
+        //         non_voters: Vec::new(),
+        //         removing: Vec::new(),
+        //     },
+        // };
+        //
+        // info!("send change in leader to network...");
+        // network_1.send(change_leader).from_err()
     })
-        .and_then(move |_summary| {
-            network_2.send(ConnectNode{id: node_b_id, info: node_b_info}).from_err()
+        .and_then(move |_| {
+            debug!("ConnectNode#{} will change node_b info, and node_a is LEADER!!!...", node_b_id);
+            network_2.send(ConnectNode{id: node_b_id, info: node_b_1}).from_err()
         })
         .and_then(move |_ack| {
             network_3.send(GetClusterSummary).from_err()
@@ -886,12 +915,20 @@ fn test_network_cmd_connect_node_leader() {
             info!("AFTER Connect summary:{:?}", summary);
             let actual = summary.unwrap();
             assert_eq!(actual.id, utils::generate_node_id("[::1]:8888"));
-            assert_eq!(actual.info, node_a_info);
+            assert_eq!(actual.info, node_a);
             assert_eq!(actual.state.isolated_nodes().is_empty(), true);
             assert_eq!(actual.state.unwrap(), Status::Joining);
             assert_eq!(actual.state.extent(), Extent::Cluster);
             assert_eq!(actual.state.connected_nodes().len(), 2);
-            debug_assert!(actual.metrics.is_none(), "no raft metrics");
+            assert!(actual.metrics.is_some(), "raft metrics");
+            let a_metrics = actual.metrics.as_ref().unwrap();
+            assert_eq!(a_metrics.id, actual.id);
+            assert_eq!(a_metrics.last_log_index, 0);
+            assert_eq!(a_metrics.current_term, 0);
+            assert_eq!(a_metrics.state, RaftState::Follower);
+            assert_eq!(a_metrics.current_leader, Some(node_a_id));
+            assert_eq!(a_metrics.last_applied, 0);
+
             futures::future::ok::<ClusterSummary, NetworkError>(actual)
         })
         .and_then(move |res| {

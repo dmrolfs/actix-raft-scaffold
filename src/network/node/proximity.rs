@@ -144,18 +144,41 @@ impl<D, R, E, S> ChangeClusterBehavior<D> for LocalNode<D, R, E, S>
     ) -> Result<(), NodeError> {
         let _node_addr = ctx.address();
         warn!(proximity = ?self, ?add_members, ?remove_members, "Changing cluster config.");
-        let proposal = raft_admin_protocol::ProposeConfigChange::new(add_members, remove_members);
+        let proximity_rep = std::rc::Rc::new(format!("{:?}", self));
+        let prep_1 = proximity_rep.clone();
+        let prep_2 = proximity_rep.clone();
+        let proposal = raft_admin_protocol::ProposeConfigChange::new(
+            add_members.clone(),
+            remove_members.clone()
+        );
+
         let task = fut::wrap_future(
             self.raft.send(proposal)
-                .map_err(|err| {
-                    error!(error = ?err, "Failed to call Node actor to propose config changes.");
+                .map_err(move |err| {
+                    error!(
+                        proximity = ?prep_1, error = ?err,
+                        "Failed to call Node actor to propose config changes."
+                    );
+
                     ()
                 })
-                .and_then(|res| {
+                .and_then(move |res| {
                     match res {
-                        Ok(_) => Ok(()),
+                        Ok(_) => {
+                            info!(
+                                proximity = ?prep_2, ?add_members, ?remove_members,
+                                 "Raft completed cluster config change."
+                            );
+
+                            Ok(())
+                        },
+
                         Err(err) => {
-                            error!(error = ?err, "Failed to call Node actor to propose config changes.");
+                            error!(
+                                proximity = ?prep_2, error = ?err,
+                                "Failed to call Node actor to propose config changes."
+                            );
+
                             Err(())
                         }
                     }
@@ -181,12 +204,13 @@ impl<D, R, E, S> ConnectionBehavior<D> for LocalNode<D, R, E, S>
         local_id_info: (NodeId, &NodeInfo),
         _ctx: &mut <Node<D> as Actor>::Context
     ) -> Result<messages::ConnectionAcknowledged, NodeError> {
-        debug!(local_id = local_id_info.0, node_id = self.id, "connect for local Node");
+        info!(proximity = ?self, local_id = local_id_info.0, "LocalNode connected");
         Ok(messages::ConnectionAcknowledged {})
     }
 
     #[tracing::instrument(skip(self, _ctx))]
     fn disconnect(&self, _ctx: &mut <Node<D> as Actor>::Context) -> Result<(), NodeError> {
+        info!(proximity = ?self, "LocalNode disconnected");
         Ok(())
     }
 }
@@ -307,6 +331,7 @@ impl<D: AppData> ChangeClusterBehavior<D> for RemoteNode {
 
         let post_raft_command_route = format!("{}/admin", self.scope());
         debug!(
+            proximity = ?self,
             remote_id = self.remote_id,
             ?command,
             route = post_raft_command_route.as_str(),
@@ -385,10 +410,8 @@ impl<D: AppData> ConnectionBehavior<D> for RemoteNode {
         //todo WORK HERE
         let register_node_route = format!("{}/nodes/{}", self.scope(), self.remote_id);
         debug!(
-            local_id = local_id_info.0,
-            remote_id = self.remote_id,
-            "connect to RemoteNode via {}",
-            register_node_route
+            proximity = ?self, local_id = local_id_info.0, remote_id = self.remote_id,
+            "connect to RemoteNode via {}", register_node_route
         );
 
         let body = NodeInfoMessage {
@@ -434,7 +457,7 @@ impl<D: AppData> ConnectionBehavior<D> for RemoteNode {
 
     #[tracing::instrument(skip(self, _ctx))]
     fn disconnect(&self, _ctx: &mut <Node<D> as Actor>::Context) -> Result<(), NodeError> {
-        info!(remote_id = self.remote_id, "disconnecting RemoteNode");
+        info!(proximity = ?self, remote_id = self.remote_id, "disconnecting RemoteNode");
         //todo WORK HERE
         Ok(())
     }
