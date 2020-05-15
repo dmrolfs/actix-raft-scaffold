@@ -586,6 +586,31 @@ impl<D, R, E, S> Handler<BindEndpoint<D, R, E, S>> for Network<D, R, E, S>
 }
 
 #[derive(Debug, Clone)]
+pub struct DiscoverNodes;
+
+impl Message for DiscoverNodes {
+    type Result = Result<Vec<NodeId>, NetworkError>;
+}
+
+impl<D, R, E, S> Handler<DiscoverNodes> for Network<D, R, E, S>
+    where
+        D: AppData,
+        R: AppDataResponse,
+        E: AppError,
+        S: RaftStorage<D, R, E>,
+{
+    // type Result = ResponseActFuture<Self, Vec<NodeId>, NetworkError>;
+    type Result = Result<Vec<NodeId>, NetworkError>;
+
+    #[tracing::instrument(skip(self, _ctx))]
+    fn handle(&mut self, _msg: DiscoverNodes, _ctx: &mut Self::Context) -> Self::Result {
+        let nodes = self.nodes.keys().map(|k| *k).collect();
+        debug!(network_id = self.id, "Network discovered nodes: {:?}", nodes);
+        Ok(nodes)
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct GetNode {
     pub node_id: Option<NodeId>,
     pub cluster_address: Option<String>,

@@ -17,7 +17,7 @@ use crate::{
     utils,
 };
 use std::option::NoneError;
-use crate::network::RegisterRaft;
+use crate::network::{RegisterRaft, DiscoverNodes};
 use actix_raft::admin::InitWithConfig;
 
 #[derive(Error, Debug)]
@@ -66,38 +66,96 @@ pub struct RaftSystem<D, R, E, S>
     pub configuration: Configuration,
 }
 
-impl<D, R, E, S> RaftSystem<D, R, E, S>
+impl<D, R, E, S> Actor for RaftSystem<D, R, E, S>
     where
         D: AppData,
         R: AppDataResponse,
         E: AppError,
         S: RaftStorage<D, R, E>,
 {
-    #[tracing::instrument(skip(self))]
-    pub fn start(&self, seed_members: Vec<NodeId>) -> Result<(), RaftSystemError> {
-        // send via network?
-        self.raft.send( InitWithConfig::new(seed_members))
-            .map_err(|err| {
+    type Context = Context<Self>;
+
+    #[tracing::instrument(skip(ctx))]
+    fn started(&mut self, ctx: &mut Self::Context) {
+        fut::wrap_future::<_, Self>(self.network.send(DiscoverNodes))
+            .map_err(|err, s, c| {
                 error!(
-                    network_id = self.id, error = ?err,
-                    "Actor send error during Raft initialization."
+                    network_id = s.id, error = ?err,
+                    "Network actor failed for DiscoverNodes command"
                 );
-                RaftSystemError::MailboxError(err)
+
+                crate::network::NetworkError::from(err)
             })
-            .and_then(|res| {
-                res
-                    .map(|_| {
-                        info!(network_id = self.id, "Raft initialization completed.");
+            .and_then(|res, _, _| { fut::result(res) })
+            .map_err(|err, s, _| {
+                error!(network_id = s.id, error = ?err, "Network failed to discover nodes");
+                ()
+            })
+            .and_then(|seed_members, system, c| {
+                info!(
+                    network_id = system.id, ?seed_members,
+                    "Initializing Raft system with seed members"
+                );
+
+                fut::wrap_future::<_, Self>(system.raft.send(InitWithConfig::new(seed_members)))
+                    .map_err(|err, system, _| {
+                        error!(
+                            network_id = system.id, error = ?err,
+                            "Raft actor failure on InitWithConfig"
+                        );
+
                         ()
                     })
-                    .map_err(|err| {
-                        error!(network_id = self.id, error = ?err, "Raft initialization failed.");
-                        RaftSystemError::from(err)
+                    .and_then(|res, s, c| {
+                        match res {
+                            Ok(_) => {
+                                info!(network_id = s.id, "Raft initialization complete.");
+                                fut::ok(())
+                            },
+
+                            Err(err) => {
+                                error!(network_id = s.id, error = ?err, "Raft InitWithConfig failed.");
+                                fut::err(())
+                            }
+                        }
                     })
             })
-            .wait()
+            .spawn(ctx);
     }
 }
+
+// impl<D, R, E, S> RaftSystem<D, R, E, S>
+//     where
+//         D: AppData,
+//         R: AppDataResponse,
+//         E: AppError,
+//         S: RaftStorage<D, R, E>,
+// {
+//     #[tracing::instrument(skip(self))]
+//     pub fn start(&self, seed_members: Vec<NodeId>) -> Result<(), RaftSystemError> {
+//         // send via network?
+//         self.raft.send( InitWithConfig::new(seed_members))
+//             .map_err(|err| {
+//                 error!(
+//                     network_id = self.id, error = ?err,
+//                     "Actor send error during Raft initialization."
+//                 );
+//                 RaftSystemError::MailboxError(err)
+//             })
+//             .and_then(|res| {
+//                 res
+//                     .map(|_| {
+//                         info!(network_id = self.id, "Raft initialization completed.");
+//                         ()
+//                     })
+//                     .map_err(|err| {
+//                         error!(network_id = self.id, error = ?err, "Raft initialization failed.");
+//                         RaftSystemError::from(err)
+//                     })
+//             })
+//             .wait()
+//     }
+// }
 
 impl<D, R, E, S> std::fmt::Debug for RaftSystem<D, R, E, S>
     where
@@ -411,44 +469,3 @@ impl<D, R, E, S> RaftSystemBuilder<D, R, E, S>
             })
     }
 }
-
-// Ok()
-
-// match self.check_requirements() {
-//     Ok(_) => {
-//         let c = self.config.as_ref()?;
-//         let raft_config = c.clone().into();
-//
-//         let host_id = self.id;
-//
-//         let host = c.host.clone();
-//         let host_info = self.config.as_ref()?.seed_nodes.get(&host)?.clone();
-//
-//         let storage = self.storage_factory.as_ref()?.create();
-//         let network = self.build_network_if_needed();
-//         let host_network = network.clone();
-//         let metrics_recipient = network.clone().recipient();
-//
-//         let raft = Raft::create(move |_| {
-//             let r = Raft::new(
-//                 host_id,
-//                 raft_config,
-//                 network,
-//                 storage,
-//                 metrics_recipient,
-//             );
-//
-//             r
-//         });
-//
-//         Ok(RaftSystem {
-//             id: host_id,
-//             raft,
-//             network: host_network,
-//             info: host_info,
-//             configuration: c.clone(),
-//         })
-//     },
-//
-//     Err(err) => RaftSystemError::from(err),
-// }

@@ -22,6 +22,9 @@ use actix_raft_scaffold::{
     config::Configuration,
     ports::{PortData, http::entities},
     raft::RaftSystemBuilder,
+    raft::*,
+    raft::network::*,
+    raft::network::node::*,
     fib::FibActor,
 };
 
@@ -858,14 +861,17 @@ fn test_network_cmd_connect_node_leader() {
     let node_b_1 = node_b.clone();
 
     let task = prep_task.and_then(move |_summary| {
-        let members = prep_1.members.keys().map(|k| *k).collect();
+        // let members = prep_1.members.keys().map(|k| *k).collect();
         info!("Starting RaftSystem...");
-        prep_1.system.start(members)
-            .map_err(|err| {
-                error!(error = ?err, "Raft InitWithConfig failure.");
-                panic!("Raft InitWithConfig failure: {:?}", err);
-            })
-            .map(|_| info!("Raft init succeeded!!"))
+        let system_arb = Arbiter::new();
+        let _ = RaftSystem::start_in_arbiter(&system_arb, |_| prep_1.system);
+        futures::future::ok(())
+        // prep_1.system.start(members)
+        //     .map_err(|err| {
+        //         error!(error = ?err, "Raft InitWithConfig failure.");
+        //         panic!("Raft InitWithConfig failure: {:?}", err);
+        //     })
+        //     .map(|_| info!("Raft init succeeded!!"))
 
         // let cmd = actix_raft::admin::InitWithConfig::new(members);
         // prep.system.raft.send(cmd)
