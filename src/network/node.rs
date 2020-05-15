@@ -15,9 +15,7 @@ use super::messages::{
     ChangeClusterConfig,
 };
 
-pub use proximity::{ProximityBehavior, LocalNode, RemoteNode};
-
-mod proximity;
+pub use super::proximity::{ProximityBehavior, LocalNode, RemoteNode};
 
 #[derive(Error, Debug)]
 pub enum NodeError {
@@ -179,7 +177,7 @@ impl<D: AppData> Node<D> {
 
             Err(err) => {
                 error!(
-                    local_id = self.local_id, node_id = self.id,
+                    local_id = self.local_id, node_id = self.id, error = ?err,
                     "Error in network handling of node status change to {:?}", new_status
                 );
                 ()

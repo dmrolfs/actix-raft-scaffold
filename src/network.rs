@@ -8,7 +8,7 @@ use actix_server::Server;
 use actix_raft::{
     NodeId,
     Raft, AppData, AppDataResponse, AppError, RaftStorage,
-    metrics::RaftMetrics
+    metrics::{RaftMetrics, State as RaftState},
 };
 use tokio::timer::Delay;
 use tracing::*;
@@ -35,6 +35,7 @@ use crate::network::messages::ChangeClusterConfig;
 
 pub mod state;
 pub mod node;
+mod proximity;
 pub mod messages;
 pub mod summary;
 
@@ -510,7 +511,56 @@ impl<D, R, E, S> Handler<RaftMetrics> for Network<D, R, E, S>
             msg.membership_config.removing,
         );
 
+        self.advance_state_on_raft_status(&msg);
         self.metrics = Some(msg);
+    }
+}
+
+impl<D, R, E, S>  Network<D, R, E, S>
+    where
+        D: AppData,
+        R: AppDataResponse,
+        E: AppError,
+        S: RaftStorage<D, R, E>,
+{
+    #[tracing::instrument(skip())]
+    fn advance_state_on_raft_status(&mut self, metrics: &RaftMetrics) {
+        let status = &self.state.status;
+        let raft_state = &metrics.state;
+
+        match (status, raft_state) {
+            (Status::Joining, RaftState::NonVoter) => {},
+            (Status::Joining, _) => {
+                self.do_advance_state(Status::Up, "Raft is actively functioning and full member");
+            },
+
+            (Status::WeaklyUp, RaftState::NonVoter) => {},
+            (Status::WeaklyUp, _) => {
+                self.do_advance_state(Status::Up, "Raft is actively functioning and full member");
+            },
+
+            (Status::Down, RaftState::NonVoter) => {
+                self.do_advance_state(Status::Joining, "Raft is instantiated but NonVoter.");
+            },
+            (Status::Down, _) => {},
+
+            (Status::Up, RaftState::NonVoter) => {
+                self.do_advance_state(Status::Leaving, "Raft demoted to NonVoter - DOES THIS MEAN LEAVING??")
+            },
+            (Status::Up, _) => {},
+
+            (Status::Leaving, _) => {},
+            (Status::Exiting, _) => {},
+            (Status::Removed, _) => {},
+        }
+    }
+
+    fn do_advance_state(&mut self, new_status: Status, reason: &str) {
+        let old_status = self.state.advance(new_status);
+        info!(
+            network_id = self.id, %old_status, %new_status,
+            "Network promoted to {} since {})", new_status, reason
+        );
     }
 }
 
@@ -999,7 +1049,7 @@ impl<D, R, E, S> Handler<ConnectNode> for Network<D, R, E, S>
                                 match res {
                                     Ok(_) => {
                                         info!(
-                                            network_if = n.id,
+                                            network_id = n.id,
                                             "Node connection and cluster change ackd by leader."
                                         );
 
@@ -1008,7 +1058,7 @@ impl<D, R, E, S> Handler<ConnectNode> for Network<D, R, E, S>
 
                                     Err(NetworkError::NotLeader{leader_id: _, leader_address: _}) => {
                                         info!(
-                                            network_if = n.id,
+                                            network_id = n.id,
                                             "Node connection ackd but host is not leader."
                                         );
 
@@ -1018,7 +1068,7 @@ impl<D, R, E, S> Handler<ConnectNode> for Network<D, R, E, S>
 
                                     Err(NetworkError::NoElectedLeader) => {
                                         info!(
-                                            network_if = n.id,
+                                            network_id = n.id,
                                             "Node connection ackd but there is no elected leader."
                                         );
 

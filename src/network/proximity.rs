@@ -4,7 +4,7 @@ use actix_raft::{NodeId, messages as raft_protocol, admin as raft_admin_protocol
 use actix_raft::{AppData, AppDataResponse, AppError, RaftStorage};
 use tracing::*;
 use crate::NodeInfo;
-use super::{Node, NodeError};
+use super::node::{Node, NodeError};
 use crate::raft::Raft;
 use crate::ports::http::entities::NodeInfoMessage;
 use crate::network::messages;
@@ -143,16 +143,18 @@ impl<D, R, E, S> ChangeClusterBehavior<D> for LocalNode<D, R, E, S>
         ctx: &mut <Node<D> as Actor>::Context
     ) -> Result<(), NodeError> {
         let _node_addr = ctx.address();
-        warn!(proximity = ?self, ?add_members, ?remove_members, "Changing cluster config.");
+        error!(proximity = ?self, ?add_members, ?remove_members, "Changing cluster config.");
         let proximity_rep = std::rc::Rc::new(format!("{:?}", self));
         let prep_1 = proximity_rep.clone();
         let prep_2 = proximity_rep.clone();
-        let proposal = raft_admin_protocol::ProposeConfigChange::new(
+        let proposal = raft_admin_protocol::ProposeConfigChange::<D, R, E>::new(
             add_members.clone(),
             remove_members.clone()
         );
 
         let task = fut::wrap_future(
+            // futures::future::ok(())
+            // TODO DMR TEST SITUATION
             self.raft.send(proposal)
                 .map_err(move |err| {
                     error!(
@@ -228,6 +230,7 @@ impl<D, R, E, S> RaftProtocolBehavior<D> for LocalNode<D, R, E, S>
         msg: raft_protocol::AppendEntriesRequest<D>,
         _ctx: &mut <Node<D> as Actor>::Context
     ) -> Box<dyn Future<Item = raft_protocol::AppendEntriesResponse, Error = NodeError>> {
+        error!(proximity = ?self, raft_command = ?msg, "RECEIVED RAFT MESSAGE");
         //todo: WORK HERE
         Box::new(
             futures::future::ok(raft_protocol::AppendEntriesResponse {
@@ -244,6 +247,7 @@ impl<D, R, E, S> RaftProtocolBehavior<D> for LocalNode<D, R, E, S>
         msg: raft_protocol::InstallSnapshotRequest,
         _ctx: &mut <Node<D> as Actor>::Context
     ) -> Box<dyn Future<Item = raft_protocol::InstallSnapshotResponse, Error = NodeError>> {
+        error!(proximity = ?self, raft_command = ?msg, "RECEIVED RAFT MESSAGE");
         //todo WORK HERE
         Box::new(futures::future::ok(raft_protocol::InstallSnapshotResponse { term: 1 }))
     }
@@ -254,6 +258,7 @@ impl<D, R, E, S> RaftProtocolBehavior<D> for LocalNode<D, R, E, S>
         msg: raft_protocol::VoteRequest,
         _ctx: &mut <Node<D> as Actor>::Context
     ) -> Box<dyn Future<Item = raft_protocol::VoteResponse, Error = NodeError>> {
+        error!(proximity = ?self, raft_command = ?msg, "RECEIVED RAFT MESSAGE");
         //todo WORK HERE
         Box::new(
             futures::future::ok(raft_protocol::VoteResponse {
@@ -313,13 +318,14 @@ impl std::clone::Clone for RemoteNode {
 impl<D: AppData> ProximityBehavior<D> for RemoteNode {}
 
 impl<D: AppData> ChangeClusterBehavior<D> for RemoteNode {
-    #[tracing::instrument(skip(_ctx))]
+    #[tracing::instrument(skip(self, _ctx))]
     fn change_cluster_config(
         &self,
         add_members: Vec<NodeId>,
         remove_members: Vec<NodeId>,
         _ctx: &mut <Node<D> as Actor>::Context
     ) -> Result<(), NodeError> {
+        error!(proximity = ?self, "RECEIVED CHANGE CLUSTER CONFIG");
         //todo: I think cluster mutating operations should Err(NotLeader).
         unimplemented!();
 
@@ -470,6 +476,7 @@ impl<D: AppData> RaftProtocolBehavior<D> for RemoteNode {
         msg: raft_protocol::AppendEntriesRequest<D>,
         _ctx: &mut <Node<D> as Actor>::Context
     ) -> Box<dyn Future<Item = raft_protocol::AppendEntriesResponse, Error = NodeError>> {
+        error!(proximity = ?self, raft_command = ?msg, "RECEIVED RAFT MESSAGE");
         //todo WORK HERE
         Box::new(
             futures::future::ok(raft_protocol::AppendEntriesResponse {
@@ -486,6 +493,7 @@ impl<D: AppData> RaftProtocolBehavior<D> for RemoteNode {
         msg: raft_protocol::InstallSnapshotRequest,
         _ctx: &mut <Node<D> as Actor>::Context
     ) -> Box<dyn Future<Item = raft_protocol::InstallSnapshotResponse, Error = NodeError>> {
+        error!(proximity = ?self, raft_command = ?msg, "RECEIVED RAFT MESSAGE");
         //todo WORK HERE
         Box::new(futures::future::ok(raft_protocol::InstallSnapshotResponse { term: 1 }))
     }
@@ -496,6 +504,7 @@ impl<D: AppData> RaftProtocolBehavior<D> for RemoteNode {
         msg: raft_protocol::VoteRequest,
         _ctx: &mut <Node<D> as Actor>::Context
     ) -> Box<dyn Future<Item = raft_protocol::VoteResponse, Error = NodeError>> {
+        error!(proximity = ?self, raft_command = ?msg, "RECEIVED RAFT MESSAGE");
         //todo WORK HERE
         Box::new(
             futures::future::ok(raft_protocol::VoteResponse {

@@ -73,7 +73,10 @@ impl NetworkState {
             (self.status == Joining && !self.connected_nodes.is_empty())
     }
 
-    pub fn into(&mut self, next: Status) -> Status {
+    /// After verifying next status is valid considering current, advance NetworkState to next
+    /// and return previous status.
+    /// Invalid status transitions will panic.
+    pub fn advance(&mut self, next: Status) -> Status {
         self.check_next_status(next).expect("unexpected status transition");
         let now = Utc::now();
         let previous = self.log.last_mut().expect("There's always at least one state entry");

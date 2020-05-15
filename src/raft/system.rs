@@ -1,5 +1,4 @@
 use actix::prelude::*;
-use actix::dev::ToEnvelope;
 use actix_raft::{
     NodeId,
     AppData, AppDataResponse, AppError, RaftStorage,
@@ -12,9 +11,7 @@ use crate::{
     Configuration, ConfigurationError,
     network::{Network, BindEndpoint},
     ports::PortData,
-    ring::Ring,
     storage::StorageFactory,
-    utils,
 };
 use std::option::NoneError;
 use crate::network::{RegisterRaft, DiscoverNodes};
@@ -78,7 +75,7 @@ impl<D, R, E, S> Actor for RaftSystem<D, R, E, S>
     #[tracing::instrument(skip(ctx))]
     fn started(&mut self, ctx: &mut Self::Context) {
         fut::wrap_future::<_, Self>(self.network.send(DiscoverNodes))
-            .map_err(|err, s, c| {
+            .map_err(|err, s, _| {
                 error!(
                     network_id = s.id, error = ?err,
                     "Network actor failed for DiscoverNodes command"
@@ -91,7 +88,7 @@ impl<D, R, E, S> Actor for RaftSystem<D, R, E, S>
                 error!(network_id = s.id, error = ?err, "Network failed to discover nodes");
                 ()
             })
-            .and_then(|seed_members, system, c| {
+            .and_then(|seed_members, system, _| {
                 info!(
                     network_id = system.id, ?seed_members,
                     "Initializing Raft system with seed members"
@@ -106,7 +103,7 @@ impl<D, R, E, S> Actor for RaftSystem<D, R, E, S>
 
                         ()
                     })
-                    .and_then(|res, s, c| {
+                    .and_then(|res, s, _| {
                         match res {
                             Ok(_) => {
                                 info!(network_id = s.id, "Raft initialization complete.");
