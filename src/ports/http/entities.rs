@@ -153,7 +153,7 @@ impl<D: AppData> From<raft_protocol::Entry<D>> for Entry {
 
 impl<D: AppData> Into<raft_protocol::Entry<D>> for Entry {
     fn into(self) -> raft_protocol::Entry<D> {
-        if (self.payload.is_none()) {
+        if self.payload.is_none() {
             error!( entry = ?self, "Unexpected empty entry payload");
         }
 
@@ -575,13 +575,31 @@ pub struct RaftInstallSnapshotRequest {
 
 impl From<raft_protocol::InstallSnapshotRequest> for RaftInstallSnapshotRequest {
     fn from(that: raft_protocol::InstallSnapshotRequest) -> Self {
-        unimplemented!()
+        Self {
+            target: that.target,
+            term: that.term,
+            leader_id: that.leader_id,
+            last_included_index: that.last_included_index,
+            last_included_term: that.last_included_term,
+            offset: that.offset,
+            data: that.data,
+            done: that.done,
+        }
     }
 }
 
 impl Into<raft_protocol::InstallSnapshotRequest> for RaftInstallSnapshotRequest {
     fn into(self) -> raft_protocol::InstallSnapshotRequest {
-        unimplemented!()
+        raft_protocol::InstallSnapshotRequest {
+            target: self.target,
+            term: self.term,
+            leader_id: self.leader_id,
+            last_included_index: self.last_included_index,
+            last_included_term: self.last_included_term,
+            offset: self.offset,
+            data: self.data,
+            done: self.done,
+        }
     }
 }
 
@@ -596,14 +614,12 @@ pub struct RaftInstallSnapshotResponse {
 
 impl Into<raft_protocol::InstallSnapshotResponse> for RaftInstallSnapshotResponse {
     fn into(self) -> raft_protocol::InstallSnapshotResponse {
-        unimplemented!()
+        raft_protocol::InstallSnapshotResponse { term: self.term }
     }
 }
 
 impl From<raft_protocol::InstallSnapshotResponse> for RaftInstallSnapshotResponse {
-    fn from(that: raft_protocol::InstallSnapshotResponse) -> Self {
-        unimplemented!()
-    }
+    fn from(that: raft_protocol::InstallSnapshotResponse) -> Self { Self { term: that.term } }
 }
 
 

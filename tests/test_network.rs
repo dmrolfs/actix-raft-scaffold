@@ -1,14 +1,14 @@
 mod fixtures;
 
 use std::net::SocketAddr;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use actix::spawn;
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 use tokio::timer::Delay;
 use tracing::*;
 use mockito::{mock, server_address, Matcher};
-
+use lazy_static::lazy_static;
 use ::config::Config;
 use actix::prelude::*;
 use actix_raft::*;
@@ -32,73 +32,120 @@ use crate::fixtures::memory_storage::{
 use actix_raft_scaffold::raft::system::RaftSystem;
 
 
-const NODE_A_ADDRESS: &str = "127.0.0.1:8000";
-const NODE_B_ADDRESS: &str = "127.0.0.1:8001";
-const NODE_C_ADDRESS: &str = "127.0.0.1:8002";
+const LOCALHOST: &str = "127.0.0.1";
+// const NODE_B_ADDRESS: &str = "127.0.0.1";
+// const NODE_C_ADDRESS: &str = "127.0.0.1";
 
 type TestNetwork = Network<Data, Response, Error, Storage>;
 
-fn make_node_a(address: SocketAddr) -> NodeInfo {
+static PORT_OFFSET: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+fn port_offset_get_and_increment() -> usize {
+    PORT_OFFSET.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+fn make_node_from_address(name: &str, address: SocketAddr, offset: usize) -> NodeInfo {
+    let ip = address.ip().to_string();
+
     NodeInfo {
-        name: "node_a".to_string(),
-        cluster_address: address.to_string(), //"127.0.0.1:8000".to_owned(),
-        app_address: "127.0.0.1:9000".to_owned(),
-        public_address: "127.0.0.1:8080".to_owned(),
+        name: name.to_string(),
+        cluster_address: address.to_string(),
+        app_address: format!("{}:{}", ip, 9000 + offset),
+        public_address: format!("{}:{}", ip, 10000 + offset),
     }
 }
 
-fn make_node_b(address: SocketAddr) -> NodeInfo {
+fn make_node_from_offset(name: &str, address: &str, offset: usize) -> NodeInfo {
     NodeInfo {
-        name: "node_b".to_string(),
-        cluster_address: address.to_string(), //"127.0.0.1:8001".to_owned(),
-        app_address: "127.0.0.1:9001".to_owned(),
-        public_address: "127.0.0.1:8081".to_owned(),
+        name: name.to_string(),
+        cluster_address: format!("{}:{}", address, 8000 + offset),
+        app_address: format!("{}:{}", address, 9000 + offset),
+        public_address: format!("{}:{}", address, 10000 + offset),
     }
 }
 
-fn make_node_c(address: SocketAddr) -> NodeInfo {
-    NodeInfo {
-        name: "node_c".to_string(),
-        cluster_address: address.to_string(), //"127.0.0.1:8002".to_owned(),
-        app_address: "127.0.0.1:9002".to_owned(),
-        public_address: "127.0.0.1:8082".to_owned(),
-    }
+// fn make_node_a(address: &str) -> NodeInfo {
+//     let port = PORT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+//
+//     NodeInfo {
+//         name: "node_a".to_string(),
+//         cluster_address: format!("{}:{}", address, port), //"127.0.0.1:8000".to_owned(),
+//         app_address: "127.0.0.1:9000".to_owned(),
+//         public_address: "127.0.0.1:8080".to_owned(),
+//     }
+// }
+
+// fn make_node_b(address: SocketAddr) -> NodeInfo {
+//     NodeInfo {
+//         name: "node_b".to_string(),
+//         cluster_address: address.to_string(), //"127.0.0.1:8001".to_owned(),
+//         app_address: "127.0.0.1:9001".to_owned(),
+//         public_address: "127.0.0.1:8081".to_owned(),
+//     }
+// }
+
+// fn make_node_c(address: SocketAddr) -> NodeInfo {
+//     NodeInfo {
+//         name: "node_c".to_string(),
+//         cluster_address: address.to_string(), //"127.0.0.1:8002".to_owned(),
+//         app_address: "127.0.0.1:9002".to_owned(),
+//         public_address: "127.0.0.1:8082".to_owned(),
+//     }
+// }
+
+lazy_static! {
+    static ref NAMES: Vec<&'static str> = vec![
+        "node_a", "node_b", "node_c", "node_d", "node_e", "node_f", "node_g", "node_h", "node_i",
+        "node_j", "node_k", "node_l",  "node_m", "node_n", "node_o", "node_p", "node_q", "node_r",
+        "node_s", "node_t", "node_u",  "node_v", "node_w", "node_x", "node_y", "node_z",
+    ];
 }
 
-fn make_all_nodes() -> Vec<NodeInfo> {
-    vec![
-        make_node_a(NODE_A_ADDRESS.parse().unwrap()),
-        make_node_b(NODE_B_ADDRESS.parse().unwrap()),
-        make_node_c(NODE_C_ADDRESS.parse().unwrap()),
-    ]
+fn make_all_nodes(offsets: &Vec<usize>) -> Vec<NodeInfo> {
+    offsets.iter()
+        .zip(NAMES.iter())
+        .map(|(offset, name)| {
+            make_node_from_offset(*name, LOCALHOST, *offset)
+        })
+        .collect()
+    //todo maybe zip with names
+    // vec![
+    //     make_node_from_offset("node_a", LOCALHOST, *offsets.get(0).unwrap()),
+    //     make_node_from_offset("node_b", LOCALHOST, *offsets.get(1).unwrap()),
+    //     make_node_from_offset("node_c", LOCALHOST, *offsets.get(2).unwrap()),
+    // ]
 }
 
-fn make_expected_nodes() -> BTreeMap<NodeId, NodeInfo> {
-    let expected_a = NodeInfo {
-        name: "node_a".to_owned(),
-        cluster_address: "127.0.0.1:8000".to_owned(),
-        app_address: "127.0.0.1:9000".to_owned(),
-        public_address: "127.0.0.1:8080".to_owned(),
-    };
-
-    let expected_b = NodeInfo {
-        name: "node_b".to_owned(),
-        cluster_address: "127.0.0.1:8001".to_owned(),
-        app_address: "127.0.0.1:9001".to_owned(),
-        public_address: "127.0.0.1:8081".to_owned(),
-    };
-
-    let expected_c = NodeInfo {
-        name: "node_c".to_owned(),
-        cluster_address: "127.0.0.1:8002".to_owned(),
-        app_address: "127.0.0.1:9002".to_owned(),
-        public_address: "127.0.0.1:8082".to_owned(),
-    };
-
+fn make_expected_nodes(offsets: &Vec<usize>) -> BTreeMap<NodeId, NodeInfo> {
+    let expected = make_all_nodes(offsets);
     let mut expected_nodes = BTreeMap::new();
-    expected_nodes.insert(expected_a.node_id(), expected_a);
-    expected_nodes.insert(expected_b.node_id(), expected_b);
-    expected_nodes.insert(expected_c.node_id(), expected_c);
+    for n in expected.into_iter() {
+        expected_nodes.insert(n.node_id(), n);
+    }
+
+    // let expected_a = expected.get(0).unwrap();
+    // let expected_b = expected.get(1).unwrap();
+    // let expected_c = expected.get(2).unwrap();
+    // let expected_a = make_node_w_offset("node_a", LOCALHOST, 0);
+    // let expected_b = make_node_w_offset("node_b", LOCALHOST, 1);
+    // let
+    //     NodeInfo {
+    //     name: "node_b".to_owned(),
+    //     cluster_address: "127.0.0.1:8001".to_owned(),
+    //     app_address: "127.0.0.1:9001".to_owned(),
+    //     public_address: "127.0.0.1:8081".to_owned(),
+    // };
+    //
+    // let expected_c = NodeInfo {
+    //     name: "node_c".to_owned(),
+    //     cluster_address: "127.0.0.1:8002".to_owned(),
+    //     app_address: "127.0.0.1:9002".to_owned(),
+    //     public_address: "127.0.0.1:8082".to_owned(),
+    // };
+
+    // let mut expected_nodes = BTreeMap::new();
+    // expected_nodes.insert(expected_a.node_id(), expected_a.clone());
+    // expected_nodes.insert(expected_b.node_id(), expected_b.clone());
+    // expected_nodes.insert(expected_c.node_id(), expected_c.clone());
     expected_nodes
 }
 
@@ -110,12 +157,12 @@ fn make_test_network(node_info: &NodeInfo) -> TestNetwork {
 }
 
 #[tracing::instrument]
-fn make_test_configuration<S>(host: S, nodes: Vec<&NodeInfo>) -> Configuration
+fn make_test_configuration<S>(host: S, host_offset: usize, nodes: Vec<&NodeInfo>) -> Configuration
 where
     S: AsRef<str> + std::fmt::Debug,
 {
     let mut c: Config = Config::default();
-    c.set("discovery_host_address", "127.0.0.1:8080").unwrap();
+    c.set("discovery_host_address", format!("{}:{}", LOCALHOST, 8000 + host_offset)).unwrap();
     c.set("join_strategy", "static").unwrap();
     c.set("ring_replicas", 10).unwrap();
     c.set("max_discovery_timeout", 5).unwrap();
@@ -174,10 +221,14 @@ fn test_network_configure() {
     let span = span!( Level::INFO, "test_network_bind" );
     let _ = span.enter();
 
-    let node_info = make_node_a(NODE_A_ADDRESS.parse().unwrap());
-    let nodes = make_all_nodes();
+    let offset_a = port_offset_get_and_increment();
+    let offset_b = port_offset_get_and_increment();
+    let offset_c = port_offset_get_and_increment();
+
+    let node_info = make_node_from_offset("node_a", LOCALHOST, offset_a);
+    let nodes = make_all_nodes(&vec![offset_a, offset_b, offset_c]);
     let nodes_ref = nodes.iter().by_ref().collect();
-    let config = make_test_configuration(node_info.clone().name, nodes_ref);
+    let config = make_test_configuration(node_info.name.as_str(), offset_a, nodes_ref);
 
     let mut actual = make_test_network(&node_info);
     actual.configure_with(&config);
@@ -194,7 +245,7 @@ fn test_network_configure() {
     assert_eq!(actual.nodes.is_empty(), false);
     assert_eq!(actual.nodes.len(), 3);
 
-    let expected_nodes = make_expected_nodes();
+    let expected_nodes = make_expected_nodes(&vec![offset_a, offset_b, offset_c]);
 
     let actual_nodes = actual.nodes.iter()
         .map( |kv| (*kv.0, kv.1.info.as_ref().unwrap().clone()))
@@ -214,12 +265,16 @@ fn test_network_start() {
     let span = span!( Level::INFO, "test_network_bind" );
     let _ = span.enter();
 
+    let offset_a = port_offset_get_and_increment();
+    let offset_b = port_offset_get_and_increment();
+    let offset_c = port_offset_get_and_increment();
+
     let sys = System::builder().stop_on_panic(true).name("test").build();
 
-    let node_info = make_node_a(NODE_A_ADDRESS.parse().unwrap());
-    let nodes = make_all_nodes();
+    let node_info = make_node_from_offset("node_a", LOCALHOST, offset_a);
+    let nodes = make_all_nodes(&vec![offset_a, offset_b, offset_c]);
     let nodes_ref = nodes.iter().by_ref().collect();
-    let config = make_test_configuration("node_a", nodes_ref);
+    let config = make_test_configuration(node_info.name.as_str(), offset_a, nodes_ref);
     let mut network = make_test_network(&node_info);
     network.configure_with(&config);
     let network_addr = network.start();
@@ -234,7 +289,7 @@ fn test_network_start() {
             info!("B: actual cluster summary:{:?}", actual);
 
             info!("actual.id: {:?}", actual.id);
-            assert_eq!(actual.id, utils::generate_node_id("127.0.0.1:8000"));
+            assert_eq!(actual.id, utils::generate_node_id(nodes.get(0).unwrap().cluster_address.as_str()));
 
             info!("actual.info: {:?}", actual.info);
             assert_eq!(actual.info, node_info);
@@ -277,11 +332,16 @@ fn test_network_builder() {
     let span = span!( Level::INFO, "test_network_bind" );
     let _ = span.enter();
 
+    let offset_a = port_offset_get_and_increment();
+    let offset_b = port_offset_get_and_increment();
+    let offset_c = port_offset_get_and_increment();
+
     let sys = System::builder().stop_on_panic(true).name("test").build();
 
-    let node_infos = make_all_nodes();
-    let config = make_test_configuration("node_a", node_infos.iter().by_ref().collect());
-    let local_id = utils::generate_node_id(NODE_A_ADDRESS);
+    let node_infos = make_all_nodes(&vec![offset_a, offset_b, offset_c]);
+    let node_a = node_infos.get(0).unwrap().clone();
+    let config = make_test_configuration("node_a", offset_a, node_infos.iter().by_ref().collect());
+    let local_id = utils::generate_node_id(node_a.cluster_address.as_str());
     let seed_members = node_infos.iter()
         .map(|info| { info.node_id() })
         .collect();
@@ -296,7 +356,7 @@ fn test_network_builder() {
         .build()
         .unwrap();
 
-    let node_info = make_node_a(NODE_A_ADDRESS.parse().unwrap());
+    let node_info = make_node_from_offset("node_a", LOCALHOST, offset_a);
 
     let test = system.network.send(GetClusterSummary)
         .map_err(|err| {
@@ -308,7 +368,7 @@ fn test_network_builder() {
             info!("B: actual cluster summary:{:?}", actual);
 
             info!("actual.id: {:?}", actual.id);
-            assert_eq!(actual.id, utils::generate_node_id("127.0.0.1:8000"));
+            assert_eq!(actual.id, utils::generate_node_id(node_a.cluster_address.as_str()));
 
             info!("actual.info: {:?}", actual.info);
             assert_eq!(actual.info, node_info);
@@ -349,17 +409,21 @@ fn test_network_bind() {
     let span = span!( Level::INFO, "test_network_bind" );
     let _ = span.enter();
 
+    let offset_a = port_offset_get_and_increment();
+    let offset_b = port_offset_get_and_increment();
+    // let offset_c = port_offset_get_and_increment();
+
     let sys = System::builder().stop_on_panic(true).name("test").build();
 
-    let node_a = make_node_a(NODE_A_ADDRESS.parse().unwrap());
+    let node_a = make_node_from_offset("node_a", LOCALHOST, offset_a);
     let node_a_2 = node_a.clone();
     let node_a_id = node_a.node_id();
-    let node_b = make_node_b(server_address());
+    let node_b = make_node_from_address("node_b", server_address(), offset_b);
     // let node_infos = vec![node_a.clone(), node_b.clone()];
     let node_infos = vec![node_a.clone()];
     let seed_members: Vec<NodeId> = node_infos.iter().map(|info| info.node_id()).collect();
-    let expected_members: Vec<NodeId> = seed_members.clone();
-    let config = make_test_configuration("node_a", node_infos.iter().by_ref().collect());
+    // let expected_members: Vec<NodeId> = seed_members.clone();
+    let config = make_test_configuration("node_a", offset_a, node_infos.iter().by_ref().collect());
 
     let node_b_id = node_b.node_id();
     let b_path_exp = format!("/api/cluster/nodes/{}", node_b_id );
@@ -391,13 +455,13 @@ fn test_network_bind() {
         .with_configuration(&config)
         .collect();
 
-    let system = RaftSystemBuilder::new(node_a.node_id())
+    let _system = RaftSystemBuilder::new(node_a.node_id())
         .with_configuration(&config)
         .with_storage_factory(storage_factory)
         .build()
         .unwrap();
 
-    let network2 = system.network.clone();
+    // let network2 = system.network.clone();
     let route = format!("http://{}/{}", node_a_2.cluster_address, "api/cluster/nodes");
 
     let test =  Delay::new(Instant::now() + Duration::from_millis(50))
@@ -569,7 +633,7 @@ fn create_and_bind_network(
                 .and_then(move |summary| {
                     info!("baseline summary:{:?}", summary);
                     let actual = summary.unwrap();
-                    assert_eq!(actual.id, utils::generate_node_id("[::1]:8888"));
+                    assert_eq!(actual.id, host_id);
                     assert_eq!(actual.info, expected_host_info);
                     assert_eq!(actual.state.isolated_nodes().is_empty(), true);
                     assert_eq!(actual.state.unwrap(), Status::Joining);
@@ -613,12 +677,16 @@ fn test_network_cmd_connect_node_no_leader() {
     let span = span!(Level::DEBUG, "test_cmd_connect_node_no_leader");
     let _ = span.enter();
 
+    let offset_a = port_offset_get_and_increment();
+    let offset_b = port_offset_get_and_increment();
+    // let offset_c = port_offset_get_and_increment();
+
     let sys = System::builder().stop_on_panic(true).name("test-handle-connect").build();
 
-    let node_a = make_node_a("[::1]:8888".parse().unwrap());
+    let node_a = make_node_from_offset("node_a", "[::1]", offset_a);
     // let node_a_1 = node_a.clone();
-    let node_b = make_node_b(server_address());
-    let config = make_test_configuration("node_a", vec![&node_a, &node_b]);
+    let node_b = make_node_from_address("node_b", server_address(), offset_b);
+    let config = make_test_configuration("node_a", offset_a, vec![&node_a, &node_b]);
 
     let node_a_id = node_a.node_id();
     let node_b_id = node_b.node_id();
@@ -674,7 +742,7 @@ fn test_network_cmd_connect_node_no_leader() {
             info!("AFTER Connect summary:{:?}", summary);
             // let foo = *prep.members.get(&prep.network_id).unwrap();
             let actual = summary.unwrap();
-            assert_eq!(actual.id, utils::generate_node_id("[::1]:8888"));
+            assert_eq!(actual.id, utils::generate_node_id(node_a.cluster_address.as_str()));
             assert_eq!(&actual.info, prep.members.get(&prep.network_id).unwrap());
             assert_eq!(actual.state.isolated_nodes().is_empty(), true);
             assert_eq!(actual.state.unwrap(), Status::Joining);
@@ -712,12 +780,16 @@ fn test_network_cmd_connect_node_change_info() {
     let span = span!(Level::DEBUG, "test_cmd_connect_node_change_info");
     let _ = span.enter();
 
+    let offset_a = port_offset_get_and_increment();
+    let offset_b = port_offset_get_and_increment();
+    // let offset_c = port_offset_get_and_increment();
+
     let sys = System::builder().stop_on_panic(true).name("test-handle-connect").build();
 
-    let node_a = make_node_a("[::1]:8888".parse().unwrap());
+    let node_a = make_node_from_offset("node_a", "[::1]", offset_a);
     // let node_a_1 = node_a.clone();
-    let node_b = make_node_b(server_address());
-    let config = make_test_configuration("node_a", vec![&node_a, &node_b]);
+    let node_b = make_node_from_address("node_b", server_address(), offset_b);
+    let config = make_test_configuration("node_a", offset_a, vec![&node_a, &node_b]);
 
     let node_a_id = node_a.node_id();
     let node_b_id = node_b.node_id();
@@ -774,7 +846,7 @@ fn test_network_cmd_connect_node_change_info() {
             info!("AFTER Connect summary:{:?}", summary);
             // let foo = *prep.members.get(&prep.network_id).unwrap();
             let actual = summary.unwrap();
-            assert_eq!(actual.id, utils::generate_node_id("[::1]:8888"));
+            assert_eq!(actual.id, utils::generate_node_id(node_a.cluster_address.as_str()));
             assert_eq!(&actual.info, prep.members.get(&prep.network_id).unwrap());
             assert_eq!(actual.state.isolated_nodes().is_empty(), true);
             assert_eq!(actual.state.unwrap(), Status::Joining);
@@ -821,13 +893,17 @@ fn test_network_cmd_connect_node_leader() {
     let span = span!(Level::DEBUG, "test_cmd_connect_node_leader");
     let _ = span.enter();
 
+    let offset_a = port_offset_get_and_increment();
+    let offset_b = port_offset_get_and_increment();
+    // let offset_c = port_offset_get_and_increment();
+
     let sys = System::builder().stop_on_panic(true).name("test-handle-connect").build();
 
-    let node_a = make_node_a("[::1]:8888".parse().unwrap());
+    let node_a = make_node_from_offset("node_a", "[::1]", offset_a);
     // let node_a_1 = node_a.clone();
-    let node_b = make_node_b(server_address());
+    let node_b = make_node_from_address("node_b", server_address(), offset_b);
     // let config = make_test_configuration("node_a", vec![&node_a, &node_b]);
-    let config = make_test_configuration("node_a", vec![&node_a]);
+    let config = make_test_configuration("node_a", offset_a, vec![&node_a]);
 
     let node_a_id = node_a.node_id();
     let node_b_id = node_b.node_id();
@@ -909,7 +985,7 @@ fn test_network_cmd_connect_node_leader() {
         .and_then(move |summary| {
             info!("AFTER Connect summary:{:?}", summary);
             let actual = summary.unwrap();
-            assert_eq!(actual.id, utils::generate_node_id("[::1]:8888"));
+            assert_eq!(actual.id, node_a_id);
             assert_eq!(actual.info, node_a);
             assert_eq!(actual.state.isolated_nodes().is_empty(), true);
             assert_eq!(actual.state.extent(), Extent::Cluster);
@@ -921,7 +997,16 @@ fn test_network_cmd_connect_node_leader() {
             assert_eq!(a_metrics.last_log_index, 1);
             assert_eq!(a_metrics.current_term, 1);
             assert_eq!(a_metrics.state, RaftState::Leader);
-            assert_eq!(a_metrics.membership_config.members, vec![node_a_id, node_b_id]);
+
+            let mut actual_members = HashSet::new();
+            for a in a_metrics.membership_config.members.iter() {
+                actual_members.insert(*a);
+            }
+
+            let mut expected_members = HashSet::new();
+            expected_members.insert(node_a_id);
+            expected_members.insert(node_b_id);
+            assert_eq!(actual_members, expected_members);
             assert!(a_metrics.membership_config.non_voters.is_empty());
             assert!(a_metrics.membership_config.removing.is_empty());
             assert_eq!(a_metrics.current_leader, Some(node_a_id));

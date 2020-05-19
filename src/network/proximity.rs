@@ -1,6 +1,6 @@
 use std::fmt::{Debug, Display};
 use actix::prelude::*;
-use actix_raft::{NodeId, messages as raft_protocol, admin as raft_admin_protocol};
+use actix_raft::{NodeId, admin as raft_admin_protocol};
 use actix_raft::{AppData, AppDataResponse, AppError, RaftStorage};
 use tracing::*;
 use crate::NodeInfo;

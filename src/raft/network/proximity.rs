@@ -173,12 +173,12 @@ impl<D: AppData> RaftProtocolBehavior<D> for RemoteNode {
 }
 
 impl RemoteNode {
-    #[tracing::instrument(skip(self, ctx))]
+    #[tracing::instrument(skip(self, _ctx))]
     fn send_raft_command<D, M, R, M0, R0>(
         &self,
         command: M,
         path: &str,
-        ctx: &mut <Node<D> as Actor>::Context
+        _ctx: &mut <Node<D> as Actor>::Context
     ) -> Box<dyn ActorFuture<Actor = Node<D>, Item = R, Error = ()>>
                                                // Box<dyn Future<Item = R, Error = ()>>
     where
@@ -191,10 +191,7 @@ impl RemoteNode {
         R0: Into<R>,
     {
         let route = format!("{}/{}", self.scope(), path);
-        debug!(
-            proximity = ?self, ?command,
-            "send Raft RPC to remote node."
-        );
+        debug!(proximity = ?self, ?command, %route, "send Raft RPC to remote node.");
 
         let body: M0 = command.into();
 

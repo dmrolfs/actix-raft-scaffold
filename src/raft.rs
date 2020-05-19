@@ -1,7 +1,4 @@
-use actix_raft::{
-    Raft as ActixRaft,
-    AppData, AppDataResponse, AppError, RaftStorage,
-};
+use actix_raft::Raft as ActixRaft;
 use crate::network::Network;
 
 pub use self::system::RaftSystemBuilder;

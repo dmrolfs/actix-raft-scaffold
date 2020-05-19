@@ -65,6 +65,7 @@ strum_macros = "0.18"
 reqwest = "0.9"
 encoding_rs = "0.8"
 url = "1.2"
+lazy_static = "1.4.0"
 
 #prost = "0.6"
 #prost-types = "0.6"

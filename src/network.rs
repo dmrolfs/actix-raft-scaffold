@@ -504,7 +504,7 @@ impl<D, R, E, S> Handler<RaftMetrics> for Network<D, R, E, S>
     fn handle(&mut self, msg: RaftMetrics, _ctx: &mut Self::Context) -> Self::Result {
         debug!(
             network_id = self.id,
-            "RAFT node={} state={:?} leader={:?} term={} index={} applied={} cfg={{join={} members={:?} non_voters={:?} removing={:?}}}",
+            "RAFT node={} state={:?} leader={:?} term={} index={} applied={} cfg={{consensus={} members={:?} non_voters={:?} removing={:?}}}",
             msg.id, msg.state, msg.current_leader, msg.current_term, msg.last_log_index,
             msg.last_applied, msg.membership_config.is_in_joint_consensus,
             msg.membership_config.members, msg.membership_config.non_voters,
