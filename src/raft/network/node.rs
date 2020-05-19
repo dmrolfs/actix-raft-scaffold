@@ -14,8 +14,13 @@ impl<D: AppData> Handler<raft_protocol::AppendEntriesRequest<D>> for Node<D> {
         msg: raft_protocol::AppendEntriesRequest<D>,
         ctx: &mut Self::Context
     ) -> Self::Result {
+        debug!(
+            local_id = self.local_id, node_id = self.id, proximity = ?self.proximity,
+            "delegating Raft command to proximity."
+        );
+
         Box::new(
-            fut::wrap_future::<_, Self>(self.proximity.append_entries(msg, ctx))
+            self.proximity.append_entries(msg, ctx)
                 .map_err(|err, node, _| {
                     error!(
                         local_id = node.local_id, node_id = node.id,
@@ -37,8 +42,13 @@ impl<D: AppData> Handler<raft_protocol::InstallSnapshotRequest> for Node<D> {
         msg: raft_protocol::InstallSnapshotRequest,
         ctx: &mut Self::Context
     ) -> Self::Result {
+        debug!(
+            local_id = self.local_id, node_id = self.id, proximity = ?self.proximity,
+            "delegating Raft command to proximity."
+        );
+
         Box::new(
-            fut::wrap_future::<_, Self>(self.proximity.install_snapshot(msg, ctx))
+            self.proximity.install_snapshot(msg, ctx)
                 .map_err(|err, node, _| {
                     error!(
                         local_id = node.local_id, node_id = node.id,
@@ -60,8 +70,13 @@ impl<D: AppData> Handler<raft_protocol::VoteRequest> for Node<D> {
         msg: raft_protocol::VoteRequest,
         ctx: &mut Self::Context
     ) -> Self::Result {
+        debug!(
+            local_id = self.local_id, node_id = self.id, proximity = ?self.proximity,
+            "delegating Raft command to proximity."
+        );
+
         Box::new(
-            fut::wrap_future::<_, Self>(self.proximity.vote(msg, ctx))
+            self.proximity.vote(msg, ctx)
                 .map_err(|err, node, _| {
                     error!(
                         local_id = node.local_id, node_id = node.id,

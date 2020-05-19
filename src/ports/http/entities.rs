@@ -1,4 +1,8 @@
 use serde::{Serialize, Deserialize};
+use actix_raft::{AppData, messages as raft_protocol};
+use serde_cbor as cbor;
+use tracing::*;
+
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all="camelCase")]
@@ -52,7 +56,7 @@ pub struct Any {
     /// Schemes other than `http`, `https` (or the empty scheme) might be
     /// used with implementation specific semantics.
     ///
-    pub type_url: std::string::String,
+    // pub type_url: std::string::String,
     /// Must be a valid serialized protocol buffer of the above specified type.
     pub value: std::vec::Vec<u8>,
 }
@@ -67,6 +71,16 @@ pub struct Failure {
 #[serde(rename_all = "camelCase")]
 pub struct NodeId {
     pub id: u64,
+}
+
+impl NodeId {
+    pub fn vec_to_raft(ids: &Vec<NodeId>) -> Vec<actix_raft::NodeId> {
+        ids.iter().map(|id| (*id).into()).collect()
+    }
+
+    pub fn vec_from_raft(ids: &Vec<actix_raft::NodeId>) -> Vec<NodeId> {
+        ids.iter().map(|id| (*id).into()).collect()
+    }
 }
 
 impl From<actix_raft::NodeId> for NodeId {
@@ -127,8 +141,36 @@ pub struct Entry {
     pub payload: ::std::option::Option<entry::Payload>,
 }
 
+impl<D: AppData> From<raft_protocol::Entry<D>> for Entry {
+    fn from(that: raft_protocol::Entry<D>) -> Self {
+        Self {
+            term: that.term,
+            index: that.index,
+            payload: Some(that.payload.into()),
+        }
+    }
+}
+
+impl<D: AppData> Into<raft_protocol::Entry<D>> for Entry {
+    fn into(self) -> raft_protocol::Entry<D> {
+        if (self.payload.is_none()) {
+            error!( entry = ?self, "Unexpected empty entry payload");
+        }
+
+        let payload: raft_protocol::EntryPayload<D> =
+            self.payload.map(|p| p.into()).expect("payload populated");
+
+        raft_protocol::Entry {
+            term: self.term,
+            index: self.index,
+            payload,
+        }
+    }
+}
+
 pub mod entry {
     use serde::{Serialize, Deserialize};
+    use actix_raft::{AppData, messages as raft_protocol};
 
     /// This entry's payload.
     #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
@@ -138,6 +180,40 @@ pub mod entry {
         SnapshotPointer(super::SnapshotPath),
         Blank(()),
     }
+
+    impl<D:AppData> From<raft_protocol::EntryPayload<D>> for Payload {
+        fn from(that: raft_protocol::EntryPayload<D>) -> Self {
+            match that {
+                raft_protocol::EntryPayload::Blank => Payload::Blank(()),
+                raft_protocol::EntryPayload::Normal(entry) => Payload::Normal(entry.into()),
+                raft_protocol::EntryPayload::ConfigChange(change) => {
+                    Payload::ConfigChange(change.membership.into())
+                },
+                raft_protocol::EntryPayload::SnapshotPointer(pointer) => {
+                    Payload::SnapshotPointer(pointer.into())
+                },
+            }
+        }
+    }
+
+    impl<D: AppData> Into<raft_protocol::EntryPayload<D>> for Payload {
+        fn into(self) -> raft_protocol::EntryPayload<D> {
+            match self {
+                Payload::Blank(_) => raft_protocol::EntryPayload::Blank,
+                Payload::Normal(entry) => {
+                    raft_protocol::EntryPayload::Normal(entry.into())
+                },
+                Payload::ConfigChange(change) => {
+                    raft_protocol::EntryPayload::ConfigChange(
+                        raft_protocol::EntryConfigChange { membership: change.into() }
+                    )
+                },
+                Payload::SnapshotPointer(pointer) => {
+                    raft_protocol::EntryPayload::SnapshotPointer(pointer.into())
+                },
+            }
+        }
+    }
 }
 
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
@@ -146,11 +222,80 @@ pub struct EntryNormal {
     pub entry: ::std::option::Option<Normal>,
 }
 
+impl<D: AppData> From<raft_protocol::EntryNormal<D>> for EntryNormal {
+    fn from(that: raft_protocol::EntryNormal<D>) -> Self {
+        match cbor::to_vec(&that.data) {
+            Err(err) => {
+                error!(that = ?that, error = ?err, "Failed to serialize data entry");
+                panic!(format!("Failed to serialize data entry: {:?}", err));
+            },
+
+            Ok(bytes) => {
+                Self {
+                    entry: Some(Normal {
+                        data: Some(Any { value: bytes })
+                    })
+                }
+            }
+        }
+    }
+}
+
+impl<D: AppData> Into<raft_protocol::EntryNormal<D>> for EntryNormal {
+    fn into(self) -> raft_protocol::EntryNormal<D> {
+        // if self.entry.is_none() || self.entry.unwrap().data.is_none() {
+        //     error!(entry = ?self, "Unexpected empty normal entry.");
+        // }
+
+        let bytes = &self.entry.as_ref().unwrap().data.as_ref().unwrap().value;
+        let data = match cbor::from_slice::<D>(bytes.as_slice()) {
+            Ok(d) => d,
+            Err(err) => {
+                error!(entry = ?self, error = ?err, "Unexpected empty normal entry.");
+                panic!(format!("failed to deserialize normal data payload: {:?}", err));
+            }
+        };
+
+        raft_protocol::EntryNormal { data }
+    }
+}
+
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Normal {
     pub data: ::std::option::Option<Any>,
 }
+
+impl Normal {
+    pub fn new(data: Any) -> Self { Self { data: Some(data) } }
+}
+
+// impl<D: AppData> From<D> for Normal {
+//     fn from(that: D) -> Self {
+//         let data = cbor::to_vec(&that);
+//         match data {
+//             Err(err) => {
+//                 error!(that = ?that, error = ?err, "Failed to serialize data entry");
+//                 panic!(format!("Failed to serialize data entry: {:?}", err));
+//             },
+//
+//             Ok(bytes) => Self { data: Some(Any { value: bytes }) },
+//         }
+//     }
+// }
+//
+//
+// impl<D: AppData> Into<D> for Normal {
+//     fn into(self) -> D {
+//         if self.data.is_none() {
+//             error!(entry = ?self, "Expected entry data to exist.");
+//         }
+//
+//         let bytes = self.data.unwrap().value;
+//         cbor::from_slice(bytes.as_slice())
+//     }
+// }
+
 
 /// A model of the membership configuration of the cluster.
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
@@ -169,6 +314,34 @@ pub struct MembershipConfig {
     pub removing: ::std::vec::Vec<NodeId>,
 }
 
+impl From<raft_protocol::MembershipConfig> for MembershipConfig {
+    fn from(that: raft_protocol::MembershipConfig) -> Self {
+        Self {
+            is_in_joint_consensus: that.is_in_joint_consensus,
+            members: NodeId::vec_from_raft(&that.members),
+            non_voters: NodeId::vec_from_raft(&that.non_voters),
+            removing: NodeId::vec_from_raft(&that.removing),
+            // members: that.members.iter().map(|id| id.into()).collect(),
+            // non_voters: that.non_voters.iter().map(|id| id.into()).collect(),
+            // removing: that.removing.iter().map(|id| id.into()).collect(),
+        }
+    }
+}
+
+impl Into<raft_protocol::MembershipConfig> for MembershipConfig {
+    fn into(self) -> raft_protocol::MembershipConfig {
+        raft_protocol::MembershipConfig {
+            is_in_joint_consensus: self.is_in_joint_consensus,
+            members: NodeId::vec_to_raft(&self.members),
+            non_voters: NodeId::vec_to_raft(&self.non_voters),
+            removing: NodeId::vec_to_raft(&self.removing),
+            // members: self.members.iter().map(|id| id.into()).collect(),
+            // non_voters: self.non_voters.iter().map(|id| id.into()).collect(),
+            // removing: self.removing.iter().map(|id| id.into()).collect(),
+        }
+    }
+}
+
 /// A log entry pointing to a snapshot.
 ///
 /// This will only be present when read from storage. An entry of this type will never be
@@ -178,6 +351,16 @@ pub struct MembershipConfig {
 #[serde(rename_all = "camelCase")]
 pub struct SnapshotPath {
     pub path: std::string::String,
+}
+
+impl From<raft_protocol::EntrySnapshotPointer> for SnapshotPath {
+    fn from(that: raft_protocol::EntrySnapshotPointer) -> Self { Self { path: that.path } }
+}
+
+impl Into<raft_protocol::EntrySnapshotPointer> for SnapshotPath {
+    fn into(self) -> raft_protocol::EntrySnapshotPointer {
+        raft_protocol::EntrySnapshotPointer { path: self.path }
+    }
 }
 
 /// A struct used to implement the _conflicting term_ optimization outlined in §5.3 for
@@ -197,6 +380,25 @@ pub struct ConflictOpt {
     /// The index of the most recent entry which does not conflict with the received request.
     pub index: u64,
 }
+
+impl From<raft_protocol::ConflictOpt> for ConflictOpt {
+    fn from(that: raft_protocol::ConflictOpt) -> Self {
+        Self {
+            term: that.term,
+            index: that.index,
+        }
+    }
+}
+
+impl Into<raft_protocol::ConflictOpt> for ConflictOpt {
+    fn into(self) -> raft_protocol::ConflictOpt {
+        raft_protocol::ConflictOpt {
+            term: self.term,
+            index: self.index,
+        }
+    }
+}
+
 
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -258,6 +460,35 @@ pub struct RaftAppendEntriesRequest {
     pub leader_commit: u64,
 }
 
+impl<D: AppData> From<raft_protocol::AppendEntriesRequest<D>> for RaftAppendEntriesRequest {
+    fn from(that: raft_protocol::AppendEntriesRequest<D>) -> Self {
+        Self {
+            target: that.target,
+            term: that.term,
+            leader_id: that.leader_id,
+            prev_log_index: that.prev_log_index,
+            prev_log_term: that.prev_log_term,
+            leader_commit: that.leader_commit,
+            entries: that.entries.into_iter().map(|e| e.into()).collect(),
+        }
+    }
+}
+
+impl<D: AppData> Into<raft_protocol::AppendEntriesRequest<D>> for RaftAppendEntriesRequest {
+    fn into(self) -> raft_protocol::AppendEntriesRequest<D> {
+        raft_protocol::AppendEntriesRequest {
+            target: self.target,
+            term: self.term,
+            leader_id: self.leader_id,
+            prev_log_index: self.prev_log_index,
+            prev_log_term: self.prev_log_term,
+            leader_commit: self.leader_commit,
+            entries: self.entries.into_iter().map(|e| e.into()).collect(),
+        }
+    }
+}
+
+
 /// The Raft spec assigns no significance to failures during the handling or sending of RPCs
 /// and all RPCs are handled in an idempotent fashion, so Raft will almost always retry
 /// sending a failed RPC, depending on the state of the Raft.
@@ -274,8 +505,29 @@ pub struct RaftAppendEntriesResponse {
     pub conflict: ::std::option::Option<raft_append_entries_response::Conflict>,
 }
 
+impl Into<raft_protocol::AppendEntriesResponse> for RaftAppendEntriesResponse {
+    fn into(self) -> raft_protocol::AppendEntriesResponse {
+        raft_protocol::AppendEntriesResponse {
+            term: self.term,
+            success: self.success,
+            conflict_opt: self.conflict.map(|c| c.into()),
+        }
+    }
+}
+
+impl From<raft_protocol::AppendEntriesResponse> for RaftAppendEntriesResponse {
+    fn from(that: raft_protocol::AppendEntriesResponse) -> Self {
+        Self {
+            term: that.term,
+            success: that.success,
+            conflict: that.conflict_opt.map(|c| c.into()),
+        }
+    }
+}
+
 pub mod raft_append_entries_response {
     use serde::{Serialize, Deserialize};
+    use actix_raft::messages as raft_protocol;
 
     /// A value used to implement the _conflicting term_ optimization outlined in §5.3.
     ///
@@ -283,6 +535,20 @@ pub mod raft_append_entries_response {
     #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
     pub enum Conflict {
         ConflictOpt(super::ConflictOpt),
+    }
+
+    impl From<raft_protocol::ConflictOpt> for Conflict {
+        fn from(that: raft_protocol::ConflictOpt) -> Self {
+            Conflict::ConflictOpt(that.into())
+        }
+    }
+
+    impl Into<raft_protocol::ConflictOpt> for Conflict {
+        fn into(self) -> raft_protocol::ConflictOpt {
+            match self {
+                Conflict::ConflictOpt(c) => c.into(),
+            }
+        }
     }
 }
 
@@ -307,6 +573,19 @@ pub struct RaftInstallSnapshotRequest {
     pub done: bool,
 }
 
+impl From<raft_protocol::InstallSnapshotRequest> for RaftInstallSnapshotRequest {
+    fn from(that: raft_protocol::InstallSnapshotRequest) -> Self {
+        unimplemented!()
+    }
+}
+
+impl Into<raft_protocol::InstallSnapshotRequest> for RaftInstallSnapshotRequest {
+    fn into(self) -> raft_protocol::InstallSnapshotRequest {
+        unimplemented!()
+    }
+}
+
+
 /// An RPC response to an `RaftInstallSnapshotResponse` message.
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -314,6 +593,19 @@ pub struct RaftInstallSnapshotResponse {
     /// The receiving node's current term, for leader to update itself.
     pub term: u64,
 }
+
+impl Into<raft_protocol::InstallSnapshotResponse> for RaftInstallSnapshotResponse {
+    fn into(self) -> raft_protocol::InstallSnapshotResponse {
+        unimplemented!()
+    }
+}
+
+impl From<raft_protocol::InstallSnapshotResponse> for RaftInstallSnapshotResponse {
+    fn from(that: raft_protocol::InstallSnapshotResponse) -> Self {
+        unimplemented!()
+    }
+}
+
 
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -330,6 +622,30 @@ pub struct RaftVoteRequest {
     pub last_log_term: u64,
 }
 
+impl From<raft_protocol::VoteRequest> for RaftVoteRequest {
+    fn from(that: raft_protocol::VoteRequest) -> Self {
+        Self {
+            target: that.target,
+            term: that.term,
+            candidate_id: that.candidate_id,
+            last_log_index: that.last_log_index,
+            last_log_term: that.last_log_term,
+        }
+    }
+}
+
+impl Into<raft_protocol::VoteRequest> for RaftVoteRequest {
+    fn into(self) -> raft_protocol::VoteRequest {
+        raft_protocol::VoteRequest::new(
+            self.target,
+            self.term,
+            self.candidate_id,
+            self.last_log_index,
+            self.last_log_term
+        )
+    }
+}
+
 /// An RPC response to an `RaftVoteResponse` message.
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -343,6 +659,26 @@ pub struct RaftVoteResponse {
     /// If this field is true, and the sender's (the candidate's) index is greater than 0, then it
     /// should revert to the NonVoter state; if the sender's index is 0, then resume campaigning.
     pub is_candidate_unknown: bool,
+}
+
+impl Into<raft_protocol::VoteResponse> for RaftVoteResponse {
+    fn into(self) -> raft_protocol::VoteResponse {
+        raft_protocol::VoteResponse {
+            term: self.term,
+            vote_granted: self.vote_granted,
+            is_candidate_unknown: self.is_candidate_unknown,
+        }
+    }
+}
+
+impl From<raft_protocol::VoteResponse> for RaftVoteResponse {
+    fn from(that: raft_protocol::VoteResponse) -> Self {
+        Self {
+            term: that.term,
+            vote_granted: that.vote_granted,
+            is_candidate_unknown: that.is_candidate_unknown,
+        }
+    }
 }
 
 // #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]

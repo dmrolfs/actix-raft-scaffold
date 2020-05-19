@@ -9,6 +9,7 @@ use tracing::*;
 use crate::network::Network;
 
 pub mod node;
+pub mod proximity;
 
 const ERR_ROUTING_FAILURE: &str = "Failed to send RCP to node target.";
 
@@ -78,16 +79,22 @@ impl<D, R, E, S> Handler<raft_protocol::VoteRequest> for Network<D, R, E, S>
             if self.state.is_isolated_node(msg.target) || self.state.is_isolated_node(msg.candidate_id) {
                 return Box::new(fut::err::<raft_protocol::VoteResponse, (), Self>(()));
             } else {
+                let node_id = msg.target;
+
                 return Box::new(
                     fut::wrap_future::<_, Self>(node.send(msg))
-                        .map_err(|err, _, _| {
+                        .map_err(move |err, n, _| {
                             error!(
-                            error = ?err,
-                            "Vote Request - {}", ERR_ROUTING_FAILURE
-                        );
+                                network_id = n.id, node_id, error = ?err,
+                                "Vote Request - {}", ERR_ROUTING_FAILURE
+                            );
                             ()
                         })
-                        .and_then(|res, _, _| {
+                        .and_then(move |res, n, _| {
+                            debug!(
+                                network_id = n.id, node_id, response = ?res,
+                                "vote response from node"
+                            );
                             fut::result::<raft_protocol::VoteResponse, (), Self>(res)
                         })
                 );

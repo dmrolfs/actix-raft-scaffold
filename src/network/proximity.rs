@@ -6,9 +6,11 @@ use tracing::*;
 use crate::NodeInfo;
 use super::node::{Node, NodeError};
 use crate::raft::Raft;
-use crate::ports::http::entities::NodeInfoMessage;
 use crate::network::messages;
-use crate::ports::http::entities::{self, raft_protocol_command_response as entities_response};
+use crate::ports::http::entities::{
+    self as port_entities,
+    raft_protocol_command_response as port_protocol_response,
+};
 
 
 //todo: Change to be asynchronous.
@@ -33,30 +35,12 @@ pub trait ConnectionBehavior<D: AppData> {
     fn disconnect(&self, _ctx: &mut <Node<D> as Actor>::Context) -> Result<(), NodeError>;
 }
 
-pub trait RaftProtocolBehavior<D: AppData> {
-    fn append_entries(
-        &self,
-        msg: raft_protocol::AppendEntriesRequest<D>,
-        ctx: &mut <Node<D> as Actor>::Context
-    ) -> Box<dyn Future<Item = raft_protocol::AppendEntriesResponse, Error = NodeError>>;
 
-    fn install_snapshot(
-        &self,
-        msg: raft_protocol::InstallSnapshotRequest,
-        ctx: &mut <Node<D> as Actor>::Context
-    ) -> Box<dyn Future<Item = raft_protocol::InstallSnapshotResponse, Error = NodeError>>;
-
-    fn vote(
-        &self,
-        msg: raft_protocol::VoteRequest,
-        ctx: &mut <Node<D> as Actor>::Context
-    ) -> Box<dyn Future<Item = raft_protocol::VoteResponse, Error = NodeError>>;
-}
-
+//todo consider better location for this trait (or components) considering raft and not raft mod.
 pub trait ProximityBehavior<D: AppData> :
 ChangeClusterBehavior<D> +
 ConnectionBehavior<D> +
-RaftProtocolBehavior<D> +
+crate::raft::network::proximity::RaftProtocolBehavior<D> +
 Debug + Display
 { }
 
@@ -68,8 +52,8 @@ where
     E: AppError,
     S: RaftStorage<D, R, E>,
 {
-    id: NodeId,
-    raft: Addr<Raft<D, R, E, S>>,
+    pub id: NodeId,
+    pub raft: Addr<Raft<D, R, E, S>>,
 }
 
 impl<D, R, E, S> LocalNode<D, R, E, S>
@@ -143,7 +127,7 @@ impl<D, R, E, S> ChangeClusterBehavior<D> for LocalNode<D, R, E, S>
         ctx: &mut <Node<D> as Actor>::Context
     ) -> Result<(), NodeError> {
         let _node_addr = ctx.address();
-        error!(proximity = ?self, ?add_members, ?remove_members, "Changing cluster config.");
+        info!(proximity = ?self, ?add_members, ?remove_members, "Changing cluster config.");
         let proximity_rep = std::rc::Rc::new(format!("{:?}", self));
         let prep_1 = proximity_rep.clone();
         let prep_2 = proximity_rep.clone();
@@ -217,64 +201,11 @@ impl<D, R, E, S> ConnectionBehavior<D> for LocalNode<D, R, E, S>
     }
 }
 
-impl<D, R, E, S> RaftProtocolBehavior<D> for LocalNode<D, R, E, S>
-    where
-        D: AppData,
-        R: AppDataResponse,
-        E: AppError,
-        S: RaftStorage<D, R, E>,
-{
-    #[tracing::instrument(skip(self, msg, _ctx))]
-    fn append_entries(
-        &self,
-        msg: raft_protocol::AppendEntriesRequest<D>,
-        _ctx: &mut <Node<D> as Actor>::Context
-    ) -> Box<dyn Future<Item = raft_protocol::AppendEntriesResponse, Error = NodeError>> {
-        error!(proximity = ?self, raft_command = ?msg, "RECEIVED RAFT MESSAGE");
-        //todo: WORK HERE
-        Box::new(
-            futures::future::ok(raft_protocol::AppendEntriesResponse {
-                term: 1,
-                success: true,
-                conflict_opt: None,
-            })
-        )
-    }
-
-    #[tracing::instrument(skip(self, msg, _ctx))]
-    fn install_snapshot(
-        &self,
-        msg: raft_protocol::InstallSnapshotRequest,
-        _ctx: &mut <Node<D> as Actor>::Context
-    ) -> Box<dyn Future<Item = raft_protocol::InstallSnapshotResponse, Error = NodeError>> {
-        error!(proximity = ?self, raft_command = ?msg, "RECEIVED RAFT MESSAGE");
-        //todo WORK HERE
-        Box::new(futures::future::ok(raft_protocol::InstallSnapshotResponse { term: 1 }))
-    }
-
-    #[tracing::instrument(skip(self, msg, _ctx))]
-    fn vote(
-        &self,
-        msg: raft_protocol::VoteRequest,
-        _ctx: &mut <Node<D> as Actor>::Context
-    ) -> Box<dyn Future<Item = raft_protocol::VoteResponse, Error = NodeError>> {
-        error!(proximity = ?self, raft_command = ?msg, "RECEIVED RAFT MESSAGE");
-        //todo WORK HERE
-        Box::new(
-            futures::future::ok(raft_protocol::VoteResponse {
-                term: 1,
-                vote_granted: true,
-                is_candidate_unknown: false,
-            })
-        )
-    }
-}
-
 
 pub struct RemoteNode {
-    remote_id: NodeId,
-    remote_info: NodeInfo,
-    client: reqwest::Client,
+    pub remote_id: NodeId,
+    pub remote_info: NodeInfo,
+    pub client: reqwest::Client,
 }
 
 impl RemoteNode {
@@ -287,7 +218,7 @@ impl RemoteNode {
         Self { remote_id, remote_info, client, }
     }
 
-    fn scope(&self) -> String {
+    pub fn scope(&self) -> String {
         //todo: use encryption
         format!("http://{}/api/cluster", self.remote_info.cluster_address.as_str())
     }
@@ -329,7 +260,7 @@ impl<D: AppData> ChangeClusterBehavior<D> for RemoteNode {
         //todo: I think cluster mutating operations should Err(NotLeader).
         unimplemented!();
 
-        let command = entities::RaftProtocolCommand::ProposeConfigChange {
+        let command = port_entities::RaftProtocolCommand::ProposeConfigChange {
             add_members: add_members.iter().map(|m| (*m).into()).collect(),
             remove_members: remove_members.iter().map(|m| (*m).into()).collect(),
         };
@@ -338,7 +269,6 @@ impl<D: AppData> ChangeClusterBehavior<D> for RemoteNode {
         let post_raft_command_route = format!("{}/admin", self.scope());
         debug!(
             proximity = ?self,
-            remote_id = self.remote_id,
             ?command,
             route = post_raft_command_route.as_str(),
             "post Raft protocol command to (leader) RemoteNode."
@@ -350,18 +280,18 @@ impl<D: AppData> ChangeClusterBehavior<D> for RemoteNode {
             .json(&command)
             .send()
             .map_err(|err| self.convert_error(err))?
-            .json::<entities::RaftProtocolResponse>()
+            .json::<port_entities::RaftProtocolResponse>()
             .map_err(|err| self.convert_error(err))
             .and_then(|cresp| {
                 if let Some(response) = cresp.response {
                     match response {
-                        entities_response::Response::Result(_) => Ok(()),
+                        port_protocol_response::Response::Result(_) => Ok(()),
 
-                        entities_response::Response::Failure(f) => {
+                        port_protocol_response::Response::Failure(f) => {
                             Err(NodeError::ResponseFailure(f.description))
                         }
 
-                        entities_response::Response::CommandRejectedNotLeader(leader) => {
+                        port_protocol_response::Response::CommandRejectedNotLeader(leader) => {
                             Err(NodeError::RemoteNotLeaderError {
                                 leader_id: leader.leader_id.map(|id| id.into()),
                                 // leader_address: Some(leader.leader_address.to_owned()),
@@ -379,7 +309,7 @@ impl<D: AppData> ChangeClusterBehavior<D> for RemoteNode {
 
 
 impl RemoteNode {
-    fn convert_error( &self, error: reqwest::Error ) -> NodeError {
+    fn convert_error(&self, error: reqwest::Error) -> NodeError {
         match error {
             e if e.is_timeout() => NodeError::Timeout(e.to_string()),
             e if e.is_serialization() => NodeError::ResponseFailure(e.to_string()),
@@ -416,11 +346,11 @@ impl<D: AppData> ConnectionBehavior<D> for RemoteNode {
         //todo WORK HERE
         let register_node_route = format!("{}/nodes/{}", self.scope(), self.remote_id);
         debug!(
-            proximity = ?self, local_id = local_id_info.0, remote_id = self.remote_id,
+            proximity = ?self, local_id = local_id_info.0,
             "connect to RemoteNode via {}", register_node_route
         );
 
-        let body = NodeInfoMessage {
+        let body = port_entities::NodeInfoMessage {
             node_id: Some(local_id_info.0.into()),
             node_info: Some(local_id_info.1.clone().into()),
         };
@@ -431,21 +361,21 @@ impl<D: AppData> ConnectionBehavior<D> for RemoteNode {
             .json(&body)
             .send()
             .map_err(|err| self.convert_error(err))?
-            .json::<entities::RaftProtocolResponse>()
+            .json::<port_entities::RaftProtocolResponse>()
             .map_err(|err| self.convert_error(err))
             .and_then(|cresp| {
                 if let Some(response) = cresp.response {
                     match response {
-                        entities_response::Response::Result(r) => {
+                        port_protocol_response::Response::Result(r) => {
                             let ack: messages::ConnectionAcknowledged = r.into();
                             Ok(ack)
                         }
 
-                        entities_response::Response::Failure(f) => {
+                        port_protocol_response::Response::Failure(f) => {
                             Err(NodeError::ResponseFailure(f.description))
                         }
 
-                        entities_response::Response::CommandRejectedNotLeader(leader) => {
+                        port_protocol_response::Response::CommandRejectedNotLeader(leader) => {
                             Err(NodeError::RemoteNotLeaderError {
                                 leader_id: leader.leader_id.map(|id| id.into()),
                                 // leader_address: Some(leader.leader_address.to_owned()),
@@ -463,55 +393,8 @@ impl<D: AppData> ConnectionBehavior<D> for RemoteNode {
 
     #[tracing::instrument(skip(self, _ctx))]
     fn disconnect(&self, _ctx: &mut <Node<D> as Actor>::Context) -> Result<(), NodeError> {
-        info!(proximity = ?self, remote_id = self.remote_id, "disconnecting RemoteNode");
+        info!(proximity = ?self, "disconnecting RemoteNode");
         //todo WORK HERE
         Ok(())
-    }
-}
-
-impl<D: AppData> RaftProtocolBehavior<D> for RemoteNode {
-    #[tracing::instrument(skip(self, msg, _ctx))]
-    fn append_entries(
-        &self,
-        msg: raft_protocol::AppendEntriesRequest<D>,
-        _ctx: &mut <Node<D> as Actor>::Context
-    ) -> Box<dyn Future<Item = raft_protocol::AppendEntriesResponse, Error = NodeError>> {
-        error!(proximity = ?self, raft_command = ?msg, "RECEIVED RAFT MESSAGE");
-        //todo WORK HERE
-        Box::new(
-            futures::future::ok(raft_protocol::AppendEntriesResponse {
-                term: 1,
-                success: true,
-                conflict_opt: None,
-            })
-        )
-    }
-
-    #[tracing::instrument(skip(self, msg, _ctx))]
-    fn install_snapshot(
-        &self,
-        msg: raft_protocol::InstallSnapshotRequest,
-        _ctx: &mut <Node<D> as Actor>::Context
-    ) -> Box<dyn Future<Item = raft_protocol::InstallSnapshotResponse, Error = NodeError>> {
-        error!(proximity = ?self, raft_command = ?msg, "RECEIVED RAFT MESSAGE");
-        //todo WORK HERE
-        Box::new(futures::future::ok(raft_protocol::InstallSnapshotResponse { term: 1 }))
-    }
-
-    #[tracing::instrument(skip(self, msg, _ctx))]
-    fn vote(
-        &self,
-        msg: raft_protocol::VoteRequest,
-        _ctx: &mut <Node<D> as Actor>::Context
-    ) -> Box<dyn Future<Item = raft_protocol::VoteResponse, Error = NodeError>> {
-        error!(proximity = ?self, raft_command = ?msg, "RECEIVED RAFT MESSAGE");
-        //todo WORK HERE
-        Box::new(
-            futures::future::ok(raft_protocol::VoteResponse {
-                term: 1,
-                vote_granted: true,
-                is_candidate_unknown: false,
-            })
-        )
     }
 }

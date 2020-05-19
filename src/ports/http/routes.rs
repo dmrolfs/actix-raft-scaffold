@@ -2,11 +2,12 @@ use std::sync::Arc;
 use futures::{Future, future};
 use actix_web::{web, Error, HttpRequest, HttpResponse};
 use actix_raft::{AppData, AppDataResponse, AppError, RaftStorage};
+use actix_raft::messages as raft_protocol;
 use tracing::*;
 use crate::ports::PortData;
 use super::entities;
 use crate::fib::Fibonacci;
-use crate::network::{messages, ConnectNode, GetClusterSummary, };
+use crate::network::{messages, DiscoverNodes, ConnectNode, GetClusterSummary };
 
 fn node_id_from_path( req: &HttpRequest ) -> Result<u64, std::num::ParseIntError> {
     req.match_info()
@@ -121,10 +122,11 @@ pub fn node_route<D, R, E, S>(
 }
 
 // ClusterNodesRequest > ClusterNodesResponse
+#[tracing::instrument(skip(_req, _stream, srv))]
 pub fn all_nodes_route<D, R, E, S>(
     _req: HttpRequest,
     _stream: web::Payload,
-    _srv: web::Data<Arc<PortData<D, R, E, S>>>,
+    srv: web::Data<Arc<PortData<D, R, E, S>>>,
 ) -> impl Future<Item = HttpResponse, Error = Error>
     where
         D: AppData,
@@ -132,17 +134,22 @@ pub fn all_nodes_route<D, R, E, S>(
         E: AppError,
         S: RaftStorage<D, R, E>,
 {
-    // srv.network
-    //     .send(GetNodes)
-    //     .map_err(Error::from)
-    //     .and_then(|res| Ok(HttpResponse::Ok().json(res)))
-    //todo
-    info!("get all nodes");
-    let resp = entities::ClusterNodesResponse {
-        nodes: std::collections::HashMap::<u64, entities::NodeInfo>::new(),
-    };
+    debug!("get all nodes");
 
-    future::ok(HttpResponse::Ok().json(resp))
+    srv.network
+        .send(DiscoverNodes)
+        .map_err(Error::from)
+        .and_then(|res| match res {
+            Ok(res) => Ok(HttpResponse::Ok().json(res)),
+            Err(err) => { Err(actix_web::error::ErrorInternalServerError(err)) }
+        })
+
+    // //todo
+    // let resp = entities::ClusterNodesResponse {
+    //     nodes: std::collections::HashMap::<u64, entities::NodeInfo>::new(),
+    // };
+    //
+    // future::ok(HttpResponse::Ok().json(resp))
 }
 
 // ClusterStateRequest > ClusterStateResponse
@@ -163,9 +170,7 @@ pub fn state_route<D, R, E, S>(
         .map_err(|err| actix_web::error::ErrorInternalServerError(err))
         .and_then(|res| match res {
             Ok(res) => Ok(HttpResponse::Ok().json(res)),
-            Err(err) => {Err(
-                actix_web::error::ErrorInternalServerError(err)
-            )},
+            Err(err) => { Err(actix_web::error::ErrorInternalServerError(err))},
         })
 
 
@@ -210,11 +215,12 @@ pub fn install_snapshot_route<D, R, E, S>(
 }
 
 // Vote: RaftVoteRequest > RaftVoteResponse
+#[tracing::instrument(skip(body, _req, _stream, srv))]
 pub fn vote_route<D, R, E, S>(
     body: web::Json<entities::RaftVoteRequest>,
     _req: HttpRequest,
     _stream: web::Payload,
-    _srv: web::Data<Arc<PortData<D, R, E, S>>>,
+    srv: web::Data<Arc<PortData<D, R, E, S>>>,
 ) ->  impl Future<Item = HttpResponse, Error = Error>
     where
         D: AppData,
@@ -224,15 +230,32 @@ pub fn vote_route<D, R, E, S>(
 {
     info!("RAFT vote");
 
-    let vote_req = body.into_inner();
+    let vote_req: raft_protocol::VoteRequest = body.into_inner().into();
+    // let vote_req = vote_endpoint_req.into();
 
-    let resp = entities::RaftVoteResponse {
-        term: vote_req.term,
-        vote_granted: false,
-        is_candidate_unknown: false,
-    };
+    srv.network
+        .send(vote_req)
+        .map_err(Error::from)
+        .and_then(|res| {
+            match res {
+                Ok(resp) => {
+                    let payload: entities::RaftVoteResponse = resp.into();
+                    HttpResponse::Ok().json(payload)
+                },
+                Err(_) => {
+                    HttpResponse::Ok().finish()
+                }
+            }
+        })
 
-    future::ok( HttpResponse::Ok().json(resp))
+
+    // let resp = entities::RaftVoteResponse {
+    //     term: vote_req.term,
+    //     vote_granted: false,
+    //     is_candidate_unknown: false,
+    // };
+    //
+    // future::ok( HttpResponse::Ok().json(resp))
 }
 
 #[tracing::instrument(skip(_stream, _src))]
@@ -263,6 +286,7 @@ pub fn raft_protocol_route<D, R, E, S>(
 fn route_raft_command(
     command: entities::RaftProtocolCommand
 ) -> impl Future<Item = (), Error = messages::RaftProtocolError> {
+    error!(raft_command = ?command, "RECEIVED RAFT MESSAGE");
     match command {
         entities::RaftProtocolCommand::ProposeConfigChange {add_members, remove_members} => {
             debug!("routing to ProposeConfigChange...");
@@ -276,6 +300,6 @@ fn handle_raft_propose_config_change(
     add_members: Vec<entities::NodeId>,
     remove_members: Vec<entities::NodeId>
 ) -> impl Future<Item = (), Error = messages::RaftProtocolError> {
-    info!("");
+    error!("RECEIVED RAFT MESSAGE");
     future::ok(())
 }
