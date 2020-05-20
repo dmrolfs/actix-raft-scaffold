@@ -29,7 +29,6 @@ where
     E: AppError,
     S: RaftStorage<D, R, E>,
 {
-    //todo
     let nid = node_id_from_path(&req).expect("valid numerical node id");
 
     if body.node_id.is_some() && body.node_id.unwrap().id != nid {
@@ -50,10 +49,6 @@ where
     srv.network
         .send(connect_cmd)
         .map_err( Error::from)
-        // .and_then(|res| {
-        //     info!("join result = {:?}", res);
-        //     res
-        // })
         .and_then(move |_res| {
             info!("and now finding fibonacci...");
 

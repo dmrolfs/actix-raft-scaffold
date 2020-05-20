@@ -12,21 +12,17 @@ pub trait RaftProtocolBehavior<D: AppData> {
         msg: raft_protocol::AppendEntriesRequest<D>,
         ctx: &mut <Node<D> as Actor>::Context
     ) -> Box<dyn ActorFuture<Actor = Node<D>, Item = raft_protocol::AppendEntriesResponse, Error = ()>>;
-                           // Box<dyn Future<Item = raft_protocol::AppendEntriesResponse, Error = ()>>;
-
     fn install_snapshot(
         &self,
         msg: raft_protocol::InstallSnapshotRequest,
         ctx: &mut <Node<D> as Actor>::Context
     ) -> Box<dyn ActorFuture<Actor = Node<D>, Item = raft_protocol::InstallSnapshotResponse, Error = ()>>;
-                             // Box<dyn Future<Item = raft_protocol::InstallSnapshotResponse, Error = ()>>;
 
     fn vote(
         &self,
         msg: raft_protocol::VoteRequest,
         ctx: &mut <Node<D> as Actor>::Context
     ) -> Box<dyn ActorFuture<Actor = Node<D>, Item = raft_protocol::VoteResponse, Error = ()>>;
-                 // Box<dyn Future<Item = raft_protocol::VoteResponse, Error = ()>>;
 }
 
 
@@ -43,7 +39,6 @@ impl<D, R, E, S> RaftProtocolBehavior<D> for LocalNode<D, R, E, S>
         msg: raft_protocol::AppendEntriesRequest<D>,
         _ctx: &mut <Node<D> as Actor>::Context
     ) -> Box<dyn ActorFuture<Actor = Node<D>, Item = raft_protocol::AppendEntriesResponse, Error = ()>> {
-                           // Box<dyn Future<Item = raft_protocol::AppendEntriesResponse, Error = ()>> {
         debug!(
             proximity = ?self, raft_command = "AppendEntries",
             "Submitting Raft RPC to local Raft."
@@ -68,7 +63,6 @@ impl<D, R, E, S> RaftProtocolBehavior<D> for LocalNode<D, R, E, S>
         msg: raft_protocol::InstallSnapshotRequest,
         _ctx: &mut <Node<D> as Actor>::Context
     ) -> Box<dyn ActorFuture<Actor = Node<D>, Item = raft_protocol::InstallSnapshotResponse, Error = ()>> {
-                             // Box<dyn Future<Item = raft_protocol::InstallSnapshotResponse, Error = ()>> {
         debug!(
             proximity = ?self, raft_command = "InstallSnapshot",
             "Submitting Raft RPC to local Raft."
@@ -93,7 +87,6 @@ impl<D, R, E, S> RaftProtocolBehavior<D> for LocalNode<D, R, E, S>
         msg: raft_protocol::VoteRequest,
         _ctx: &mut <Node<D> as Actor>::Context
     ) -> Box<dyn ActorFuture<Actor = Node<D>, Item = raft_protocol::VoteResponse, Error = ()>> {
-                 // Box<dyn Future<Item = raft_protocol::VoteResponse, Error = ()>> {
         debug!(
             proximity = ?self, raft_command = "VoteRequest",
             "Submitting Raft RPC to local Raft."
@@ -110,14 +103,6 @@ impl<D, R, E, S> RaftProtocolBehavior<D> for LocalNode<D, R, E, S>
                 })
                 .and_then(|res, _, _| fut::result(res))
         )
-
-        // self.raft.send(msg)
-        //         .map_err(|err| {
-        //             error!(error = ?err, "VoteRequest failed in actor mailbox");
-        //             ()
-        //         })
-        //         .and_then(|res| futures::future::result(res))
-        // )
     }
 }
 
@@ -129,7 +114,6 @@ impl<D: AppData> RaftProtocolBehavior<D> for RemoteNode {
         msg: raft_protocol::AppendEntriesRequest<D>,
         ctx: &mut <Node<D> as Actor>::Context
     ) -> Box<dyn ActorFuture<Actor = Node<D>, Item = raft_protocol::AppendEntriesResponse, Error = ()>> {
-                           // Box<dyn Future<Item = raft_protocol::AppendEntriesResponse, Error = ()>> {
         self.send_raft_command::<
             D,
             raft_protocol::AppendEntriesRequest<D>,
@@ -145,7 +129,6 @@ impl<D: AppData> RaftProtocolBehavior<D> for RemoteNode {
         msg: raft_protocol::InstallSnapshotRequest,
         ctx: &mut <Node<D> as Actor>::Context
     ) -> Box<dyn ActorFuture<Actor = Node<D>, Item = raft_protocol::InstallSnapshotResponse, Error = ()>> {
-                             // Box<dyn Future<Item = raft_protocol::InstallSnapshotResponse, Error = ()>> {
         self.send_raft_command::<
             D,
             raft_protocol::InstallSnapshotRequest,
@@ -161,7 +144,6 @@ impl<D: AppData> RaftProtocolBehavior<D> for RemoteNode {
         msg: raft_protocol::VoteRequest,
         ctx: &mut <Node<D> as Actor>::Context
     ) -> Box<dyn ActorFuture<Actor = Node<D>, Item = raft_protocol::VoteResponse, Error = ()>> {
-                 // Box<dyn Future<Item = raft_protocol::VoteResponse, Error = ()>> {
         self.send_raft_command::<
             D,
             raft_protocol::VoteRequest,
@@ -180,7 +162,6 @@ impl RemoteNode {
         path: &str,
         _ctx: &mut <Node<D> as Actor>::Context
     ) -> Box<dyn ActorFuture<Actor = Node<D>, Item = R, Error = ()>>
-                                               // Box<dyn Future<Item = R, Error = ()>>
     where
         D: AppData,
         M: Message + std::fmt::Debug,
@@ -207,7 +188,6 @@ impl RemoteNode {
             .and_then(|resp| Ok(resp.into()));
 
         Box::new(fut::result(task))
-        // Box::new(futures::future::result(task))
     }
 
     fn log_raft_protocol_error(&self, error: reqwest::Error) {
@@ -216,20 +196,21 @@ impl RemoteNode {
                 warn!(proximity = ?self, error = ?e, "Raft RPC to remote timed out.");
             },
 
-            e => {
-                error!(proximity = ?self, error = ?e, "Raft RPC to remote failed");
+            e if e.is_serialization() => {
+                error!(proximity = ?self, error = ?e, "Raft RPC serialization failure.");
+                panic!(e); //todo: panic to identify intermittent test error log that I think occurs on failing to parse json response.
             },
 
-            // e if e.is_serialization() => {
-            //     error!(proximity = ?self, error = ?e, "VoteRequest serialization failure.");
-            // }
-
             // e if e.is_timeout() => NodeError::Timeout(e.to_string()),
-            // e if e.is_serialization() => NodeError::ResponseFailure(e.to_string()),
             // e if e.is_client_error() => NodeError::RequestError(e),
+            // e if e.is_serialization() => NodeError::ResponseFailure(e.to_string()),
             // e if e.is_http() => NodeError::RequestError(e),
             // e if e.is_server_error() => {},
             // e if e.is_redirect() => {
+
+            e => {
+                error!(proximity = ?self, error = ?e, "Raft RPC to remote failed");
+            },
         }
     }
 }

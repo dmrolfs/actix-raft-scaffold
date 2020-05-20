@@ -36,7 +36,6 @@ pub trait ConnectionBehavior<D: AppData> {
 }
 
 
-//todo consider better location for this trait (or components) considering raft and not raft mod.
 pub trait ProximityBehavior<D: AppData> :
 ChangeClusterBehavior<D> +
 ConnectionBehavior<D> +
@@ -137,8 +136,6 @@ impl<D, R, E, S> ChangeClusterBehavior<D> for LocalNode<D, R, E, S>
         );
 
         let task = fut::wrap_future(
-            // futures::future::ok(())
-            // TODO DMR TEST SITUATION
             self.raft.send(proposal)
                 .map_err(move |err| {
                     error!(
@@ -325,6 +322,7 @@ impl RemoteNode {
                 //         leader_address: Option<String>,
                 //     }
                 NodeError::Unknown(
+                    //todo consider redirection to leader..
                     format!(
                         "TODO: PROPERLY HANDLE REDIRECT; E.G., IF REMOTE IS NOT LEADER: {:?}",
                         e
@@ -343,7 +341,6 @@ impl<D: AppData> ConnectionBehavior<D> for RemoteNode {
         local_id_info: (NodeId, &NodeInfo),
         _ctx: &mut <Node<D> as Actor>::Context
     ) -> Result<messages::ConnectionAcknowledged, NodeError> {
-        //todo WORK HERE
         let register_node_route = format!("{}/nodes/{}", self.scope(), self.remote_id);
         debug!(
             proximity = ?self, local_id = local_id_info.0,
@@ -356,7 +353,6 @@ impl<D: AppData> ConnectionBehavior<D> for RemoteNode {
         };
 
         self.client
-            // .get("https://my-json-server.typicode.com/dmrolfs/json-test-server/connection")
             .post(&register_node_route)
             .json(&body)
             .send()
@@ -378,7 +374,6 @@ impl<D: AppData> ConnectionBehavior<D> for RemoteNode {
                         port_protocol_response::Response::CommandRejectedNotLeader(leader) => {
                             Err(NodeError::RemoteNotLeaderError {
                                 leader_id: leader.leader_id.map(|id| id.into()),
-                                // leader_address: Some(leader.leader_address.to_owned()),
                             })
                         }
                     }
