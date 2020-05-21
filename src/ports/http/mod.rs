@@ -38,16 +38,16 @@ where
         // })))
             .service(
                 web::scope("/api/cluster")
-                    // .service( web::resource("/echo").to_async(echo))
                     .service(web::resource("/nodes").to_async(all_nodes_route::<D, R, E, S0>))
-                    .service(web::resource("/admin").route(web::post().to_async(raft_protocol_route::<D, R, E, S0>)))
+                    // .service(web::resource("/admin").route(web::post().to_async(raft_protocol_route::<D, R, E, S0>)))
                     .service(
                         web::resource("/nodes/{uid}")
                             .route(web::get().to_async(node_route::<D, R, E, S0>))
                             .route(web::post().to_async(connect_node_route::<D, R, E, S0>))
                             .route(web::delete().to_async(disconnect_node_route::<D, R, E, S0>)),
                     )
-                    .service(web::resource("/state").route(web::get().to_async(state_route::<D, R, E, S0>)))
+                    // .service(web::resource("/summary").route(web::get().to_async(summary_route::<D, R, E, S0>)))
+                    .service(web::resource("/").route(web::get().to_async(summary_route::<D, R, E, S0>)))
                     .service(web::resource("/entries").route(web::post().to_async(append_entries_route::<D, R, E, S0>)))
                     .service(web::resource("/snapshots").route(web::post().to_async(install_snapshot_route::<D, R, E, S0>)))
                     .service(web::resource("/vote").route(web::post().to_async(vote_route::<D, R, E, S0>)))

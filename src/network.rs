@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::marker::PhantomData;
 use std::net::SocketAddr;
 use std::pin::Pin;
@@ -29,9 +29,9 @@ use summary::ClusterSummary;
 pub use messages::NetworkError;
 pub use messages::{
     HandleNodeStatusChange,
-    ConnectNode, ConnectionAcknowledged
+    ConnectNode, Acknowledged
 };
-use crate::network::messages::ChangeClusterConfig;
+use crate::network::messages::{ChangeClusterConfig, DisconnectNode};
 
 pub mod state;
 pub mod node;
@@ -614,26 +614,28 @@ impl<D, R, E, S> Handler<BindEndpoint<D, R, E, S>> for Network<D, R, E, S>
 }
 
 #[derive(Debug, Clone)]
-pub struct DiscoverNodes;
+pub struct GetConnectedNodes;
 
-impl Message for DiscoverNodes {
-    type Result = Result<Vec<NodeId>, NetworkError>;
+impl Message for GetConnectedNodes {
+    type Result = Result<HashMap<NodeId, Option<NodeInfo>>, NetworkError>;
 }
 
-impl<D, R, E, S> Handler<DiscoverNodes> for Network<D, R, E, S>
+impl<D, R, E, S> Handler<GetConnectedNodes> for Network<D, R, E, S>
     where
         D: AppData,
         R: AppDataResponse,
         E: AppError,
         S: RaftStorage<D, R, E>,
 {
-    // type Result = ResponseActFuture<Self, Vec<NodeId>, NetworkError>;
-    type Result = Result<Vec<NodeId>, NetworkError>;
+    // type Result = ResponseActFuture<Self, HashMap<NodeId, NodeInfo>, NetworkError>;
+    type Result = Result<HashMap<NodeId, Option<NodeInfo>>, NetworkError>;
 
     #[tracing::instrument(skip(self, _ctx))]
-    fn handle(&mut self, _msg: DiscoverNodes, _ctx: &mut Self::Context) -> Self::Result {
-        let nodes = self.nodes.keys().map(|k| *k).collect();
-        debug!(network_id = self.id, "Network discovered nodes: {:?}", nodes);
+    fn handle(&mut self, _msg: GetConnectedNodes, _ctx: &mut Self::Context) -> Self::Result {
+        let nodes = self.nodes.iter()
+            .map(|(id, node_ref)| (*id, node_ref.info.clone()))
+            .collect();
+        debug!(network_id = self.id, "Network identified nodes: {:?}", nodes);
         Ok(nodes)
     }
 }
@@ -1002,7 +1004,7 @@ impl<D, R, E, S> Handler<ConnectNode> for Network<D, R, E, S>
         E: AppError,
         S: RaftStorage<D, R, E>,
 {
-    type Result = ResponseActFuture<Self, ConnectionAcknowledged, NetworkError>;
+    type Result = ResponseActFuture<Self, Acknowledged, NetworkError>;
 
     #[tracing::instrument(skip(self, ctx))]
     fn handle(&mut self, command: ConnectNode, ctx: &mut Self::Context) -> Self::Result {
@@ -1023,7 +1025,7 @@ impl<D, R, E, S> Handler<ConnectNode> for Network<D, R, E, S>
                                             "Node connection and cluster change ackd by leader."
                                         );
 
-                                        Ok(ConnectionAcknowledged {})
+                                        Ok(Acknowledged {})
                                     },
 
                                     Err(NetworkError::NotLeader{leader_id: _, leader_address: _}) => {
@@ -1033,7 +1035,7 @@ impl<D, R, E, S> Handler<ConnectNode> for Network<D, R, E, S>
                                         );
 
                                         //todo: finalize how to handle not leader
-                                        Ok(ConnectionAcknowledged {})
+                                        Ok(Acknowledged {})
                                     },
 
                                     Err(NetworkError::NoElectedLeader) => {
@@ -1042,7 +1044,7 @@ impl<D, R, E, S> Handler<ConnectNode> for Network<D, R, E, S>
                                             "Node connection ackd but there is no elected leader."
                                         );
 
-                                        Ok(ConnectionAcknowledged {})
+                                        Ok(Acknowledged {})
                                     },
 
                                     Err(err) => {
@@ -1061,37 +1063,24 @@ impl<D, R, E, S> Handler<ConnectNode> for Network<D, R, E, S>
         )
     }
 }
-//         //todo: find leader node
-//         //todo: determine network state based on # nodes connected (0=>initialize, 1=>SingleNode, +=>Clustered)
-//         //todo: send Join to leader node
-// //todo: leader's local_node interprets Join into ChangeClusterConfig command;
-//         //todo: and_then register_node( msg.id, msg.info, ctx.address() )
-//     }
-// }
 
 
-// impl Handler<ConnectNode> for Network {
-//     type Result = ResponseActFuture<Self, ConnectionAcknowledged, NetworkError>;
-//
-//     #[tracing::instrument(skip(self, _ctx))]
-//     fn handle(&mut self, msg: ConnectNode, _ctx: &mut Self::Context) -> Self::Result {
-//         info!(network_id = self.id, "handling RegisterNode#{} request...", msg.id);
-//
-//         let target_node = msg.clone();
-//
-//         Box::new(
-//         self.leader_delegate()
-//             .and_then(move |delegate, _, _| {
-//                 fut::wrap_future(delegate.send(msg.clone()))
-//                     .map_err(|err, _, _| NetworkError::from(err))
-//             })
-//             .and_then(move |ack, net, ctx| {
-//                 info!("Node#{:?} connection acknowledged - registering with local network...", target_node.id );
-//                 fut::result(
-//                     net.register_node(target_node.id, &target_node.info, ctx.address())
-//                         .and_then(|_| ack)
-//                 )
-//             })
-//         )
-//     }
-// }
+impl<D, R, E, S> Handler<DisconnectNode> for Network<D, R, E, S>
+    where
+        D: AppData,
+        R: AppDataResponse,
+        E: AppError,
+        S: RaftStorage<D, R, E>,
+{
+    type Result = Result<Acknowledged, NetworkError>;
+
+    #[tracing::instrument(skip(self, msg, _ctx))]
+    fn handle(&mut self, msg: DisconnectNode, _ctx: &mut Self::Context) -> Self::Result {
+        let discarded = self.nodes.remove(&msg.0);
+        debug!(
+            network_id = self.id, disconnected_node_ref = ?discarded,
+            "Disconnected node from network."
+        );
+        Ok(Acknowledged)
+    }
+}

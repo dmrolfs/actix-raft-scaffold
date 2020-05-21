@@ -400,10 +400,11 @@ fn network_bind() {
             panic!(err)
         })
         .and_then(move |mut resp| {
-            info!(response = ?resp, "response from GET all nodes.");
-            let actual = resp.json::<Vec::<NodeId>>().unwrap();
+            let body = resp.text();
+            info!(response = ?resp, ?body, "response from GET all nodes.");
+            let actual: HashMap<NodeId, Option<NodeInfo>> = serde_json::from_str(body.unwrap().as_str()).unwrap();
             assert_eq!(actual.len(), 1);
-            assert_eq!(*actual.get(0).unwrap(), node_a_id);
+            assert!(actual.contains_key(&node_a_id));
             Ok(())
         })
         .then(|res| {

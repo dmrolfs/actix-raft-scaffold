@@ -29,7 +29,7 @@ pub trait ConnectionBehavior<D: AppData> {
         &self,
         local_id_info: (NodeId, &NodeInfo),
         ctx: &mut <Node<D> as Actor>::Context
-    ) -> Result<messages::ConnectionAcknowledged, NodeError>;
+    ) -> Result<messages::Acknowledged, NodeError>;
 
     //todo: make nonblocking because of distributed network calls
     fn disconnect(&self, _ctx: &mut <Node<D> as Actor>::Context) -> Result<(), NodeError>;
@@ -186,9 +186,9 @@ impl<D, R, E, S> ConnectionBehavior<D> for LocalNode<D, R, E, S>
         &self,
         local_id_info: (NodeId, &NodeInfo),
         _ctx: &mut <Node<D> as Actor>::Context
-    ) -> Result<messages::ConnectionAcknowledged, NodeError> {
+    ) -> Result<messages::Acknowledged, NodeError> {
         info!(proximity = ?self, local_id = local_id_info.0, "LocalNode connected");
-        Ok(messages::ConnectionAcknowledged {})
+        Ok(messages::Acknowledged {})
     }
 
     #[tracing::instrument(skip(self, _ctx))]
@@ -340,7 +340,7 @@ impl<D: AppData> ConnectionBehavior<D> for RemoteNode {
         &self,
         local_id_info: (NodeId, &NodeInfo),
         _ctx: &mut <Node<D> as Actor>::Context
-    ) -> Result<messages::ConnectionAcknowledged, NodeError> {
+    ) -> Result<messages::Acknowledged, NodeError> {
         let register_node_route = format!("{}/nodes/{}", self.scope(), self.remote_id);
         debug!(
             proximity = ?self, local_id = local_id_info.0,
@@ -363,7 +363,7 @@ impl<D: AppData> ConnectionBehavior<D> for RemoteNode {
                 if let Some(response) = cresp.response {
                     match response {
                         port_protocol_response::Response::Result(r) => {
-                            let ack: messages::ConnectionAcknowledged = r.into();
+                            let ack: messages::Acknowledged = r.into();
                             Ok(ack)
                         }
 

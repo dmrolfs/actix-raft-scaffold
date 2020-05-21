@@ -169,20 +169,24 @@ pub struct ConnectNode {
 }
 
 impl Message for ConnectNode {
-    type Result = Result<ConnectionAcknowledged, NetworkError>;
+    type Result = Result<Acknowledged, NetworkError>;
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DisconnectNode(pub NodeId);
+
+impl Message for DisconnectNode {
+    type Result = Result<Acknowledged, NetworkError>;
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub struct ConnectionAcknowledged {}
+pub struct Acknowledged;
 
-impl From<entities::ResponseResult> for ConnectionAcknowledged {
+impl From<entities::ResponseResult> for Acknowledged {
     fn from(that: entities::ResponseResult) -> Self {
         match that {
-            entities::ResponseResult::ConnectionAcknowledged { node_id: _ } => {
-                Self {}
-            },
-
-            _ => panic!("cannot create ConnectionAcknowledged from other protocol result:{:?}", that),
+            entities::ResponseResult::ConnectionAcknowledged { node_id: _ } => Self,
+            entities::ResponseResult::Acknowledged => Self,
         }
     }
 }

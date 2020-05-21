@@ -11,7 +11,7 @@ use crate::NodeInfo;
 use super::HandleNodeStatusChange;
 use super::messages::{
     NetworkError,
-    ConnectNode, ConnectionAcknowledged,
+    ConnectNode, Acknowledged,
     ChangeClusterConfig,
 };
 
@@ -251,7 +251,7 @@ impl<D: AppData> Node<D> {
     #[tracing::instrument(skip(self, ack, _ctx))]
     fn handle_connect_result(
         &mut self,
-        ack: ConnectionAcknowledged,
+        ack: Acknowledged,
         _ctx: &mut <Node<D> as Actor>::Context
     ) -> impl ActorFuture<Actor=Self, Item=(), Error=()> {
         info!(local_id = self.local_id, node_id = self.id, "connection made to node: {:?}", ack);
@@ -263,9 +263,9 @@ impl<D: AppData> Node<D> {
     fn connect(
         &mut self,
         ctx: &mut Context<Self>
-    ) -> impl ActorFuture<Actor=Self, Item=ConnectionAcknowledged, Error=NodeError> {
+    ) -> impl ActorFuture<Actor=Self, Item=Acknowledged, Error=NodeError> {
         if self.status.is_connected() {
-            return fut::ok(ConnectionAcknowledged {});
+            return fut::ok(Acknowledged {});
         } else {
             info!(
                 local_id = self.local_id, node_id = self.id, proximity = ?self.proximity,
@@ -428,7 +428,7 @@ impl<D: AppData> Node<D> {
 }
 
 impl<D: AppData> Handler<ConnectNode> for Node<D> {
-    type Result = ResponseActFuture<Self, ConnectionAcknowledged, NetworkError>;
+    type Result = ResponseActFuture<Self, Acknowledged, NetworkError>;
 
     #[tracing::instrument(skip(self, ctx))]
     fn handle(&mut self, msg: ConnectNode, ctx: &mut Self::Context) -> Self::Result {
@@ -444,7 +444,7 @@ impl<D: AppData> Handler<ConnectNode> for Node<D> {
                 fut::result(
                     res
                         .map_err(|err| NetworkError::from(err))
-                        .map(|_| ConnectionAcknowledged {} )
+                        .map(|_| Acknowledged {} )
                 )
             });
 

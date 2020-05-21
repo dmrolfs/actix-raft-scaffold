@@ -14,7 +14,7 @@ use crate::{
     storage::StorageFactory,
 };
 use std::option::NoneError;
-use crate::network::{RegisterRaft, DiscoverNodes};
+use crate::network::{RegisterRaft, GetConnectedNodes};
 use actix_raft::admin::InitWithConfig;
 
 #[derive(Error, Debug)]
@@ -74,7 +74,7 @@ impl<D, R, E, S> Actor for RaftSystem<D, R, E, S>
 
     #[tracing::instrument(skip(ctx))]
     fn started(&mut self, ctx: &mut Self::Context) {
-        fut::wrap_future::<_, Self>(self.network.send(DiscoverNodes))
+        fut::wrap_future::<_, Self>(self.network.send(GetConnectedNodes))
             .map_err(|err, s, _| {
                 error!(
                     network_id = s.id, error = ?err,
@@ -94,7 +94,12 @@ impl<D, R, E, S> Actor for RaftSystem<D, R, E, S>
                     "Initializing Raft system with seed members"
                 );
 
-                fut::wrap_future::<_, Self>(system.raft.send(InitWithConfig::new(seed_members)))
+                let seeds = seed_members.into_iter()
+                    .filter(|(_, info)| info.is_some())
+                    .map(|(id, _)| id)
+                    .collect();
+
+                fut::wrap_future::<_, Self>(system.raft.send(InitWithConfig::new(seeds)))
                     .map_err(|err, system, _| {
                         error!(
                             network_id = system.id, error = ?err,
