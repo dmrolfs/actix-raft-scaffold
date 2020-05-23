@@ -1,5 +1,6 @@
+use std::collections::HashMap;
 use std::sync::Arc;
-use futures::{Future, future};
+use futures::Future;
 use actix_web::{web, Error, HttpRequest, HttpResponse};
 use actix_raft::{AppData, AppDataResponse, AppError, RaftStorage};
 use actix_raft::messages as raft_protocol;
@@ -7,10 +8,7 @@ use tracing::*;
 use crate::ports::PortData;
 use super::entities;
 use crate::fib::Fibonacci;
-use crate::network::{
-    GetConnectedNodes, ConnectNode, GetClusterSummary,
-    messages::DisconnectNode
-};
+use crate::network::{GetConnectedNodes, ConnectNode, GetClusterSummary, messages::DisconnectNode, GetNode};
 
 fn node_id_from_path( req: &HttpRequest ) -> Result<u64, std::num::ParseIntError> {
     req.match_info()
@@ -91,23 +89,21 @@ pub fn disconnect_node_route<D, R, E, S>(
     let nid = node_id_from_path(&req).expect("valid numerical node id");
     info!("disconnect node from network {:?}", nid);
 
-    let task = srv.network
+    srv.network
         .send(DisconnectNode(nid))
         .map_err(Error::from)
         .and_then(move |res| match res {
             Ok(_) => Ok(HttpResponse::Ok().finish()),
             Err(err) => Err(actix_web::error::ErrorInternalServerError(err)),
-        });
-
-    Box::new(task)
+        })
 }
 
 // NodeIdMessage > NodeInfoMessage
-#[tracing::instrument(skip(_stream, _srv))]
+#[tracing::instrument(skip(_stream, srv))]
 pub fn node_route<D, R, E, S>(
     req: HttpRequest,
     _stream: web::Payload,
-    _srv: web::Data<Arc<PortData<D, R, E, S>>>,
+    srv: web::Data<Arc<PortData<D, R, E, S>>>,
 ) -> impl Future<Item = HttpResponse, Error = Error>
     where
         D: AppData,
@@ -115,19 +111,22 @@ pub fn node_route<D, R, E, S>(
         E: AppError,
         S: RaftStorage<D, R, E>,
 {
-    //todo
     let nid = node_id_from_path(&req).expect("valid numerical node id");
 
     info!("get node info {:?}", nid);
 
-    // srv.network
-    //     .send( GetNode::new(nid.to_string))
-    // srv.network
-    //     .send(GetNode(uid.to_string()))
-    //     .map_err(Error::from)
-    //     .and_then(|res| Ok(HttpResponse::Ok().json(res)))
-    //todo
-    future::ok(HttpResponse::Ok().json(()))
+    srv.network
+        .send(GetNode::for_id(nid))
+        .map_err(Error::from)
+        .and_then(move |res| match res {
+            Ok((node_id, node_info)) => {
+                let mut body = HashMap::new();
+                let info: Option<entities::NodeInfo> = node_info.map(|info| info.into());
+                body.insert(node_id, info);
+                Ok(HttpResponse::Ok().json(body))
+            },
+            Err(err) => Err(actix_web::error::ErrorInternalServerError(err)),
+        })
 }
 
 // ClusterNodesRequest > ClusterNodesResponse
@@ -178,12 +177,12 @@ pub fn summary_route<D, R, E, S>(
 }
 
 // AppendEntries: RaftAppendEntriesRequest > RaftAppendEntriesResponse
-#[tracing::instrument(skip(_stream, _srv))]
+#[tracing::instrument(skip(_stream, srv))]
 pub fn append_entries_route<D, R, E, S>(
-    _body: web::Json<entities::RaftAppendEntriesRequest>,
+    body: web::Json<entities::RaftAppendEntriesRequest>,
     _req: HttpRequest,
     _stream: web::Payload,
-    _srv: web::Data<Arc<PortData<D, R, E, S>>>,
+    srv: web::Data<Arc<PortData<D, R, E, S>>>,
 ) ->  impl Future<Item = HttpResponse, Error = Error>
     where
         D: AppData,
@@ -192,16 +191,30 @@ pub fn append_entries_route<D, R, E, S>(
         S: RaftStorage<D, R, E>,
 {
     info!("RAFT append entries");
-    future::ok( HttpResponse::Ok().json(()))
+
+    let append_req: raft_protocol::AppendEntriesRequest<D> = body.into_inner().into();
+
+    srv.network
+        .send(append_req)
+        .map_err(Error::from)
+        .and_then(|res| match res {
+            Ok(resp) => {
+                let payload: entities::RaftAppendEntriesResponse = resp.into();
+                HttpResponse::Ok().json(payload)
+            },
+
+            Err(_) => HttpResponse::Ok().finish(),
+        })
+
 }
 
 // InstallSnaphot: RaftInstallSnapshotRequest > RaftInstallSnapshotResponse
-#[tracing::instrument(skip(_stream, _srv))]
+#[tracing::instrument(skip(_stream, srv))]
 pub fn install_snapshot_route<D, R, E, S>(
-    _body: web::Json<entities::RaftInstallSnapshotRequest>,
+    body: web::Json<entities::RaftInstallSnapshotRequest>,
     _req: HttpRequest,
     _stream: web::Payload,
-    _srv: web::Data<Arc<PortData<D, R, E, S>>>,
+    srv: web::Data<Arc<PortData<D, R, E, S>>>,
 ) ->  impl Future<Item = HttpResponse, Error = Error>
     where
         D: AppData,
@@ -210,7 +223,20 @@ pub fn install_snapshot_route<D, R, E, S>(
         S: RaftStorage<D, R, E>,
 {
     info!("RAFT install snapshot");
-    future::ok( HttpResponse::Ok().json(()))
+
+    let install_req: raft_protocol::InstallSnapshotRequest = body.into_inner().into();
+
+    srv.network
+        .send(install_req)
+        .map_err(Error::from)
+        .and_then(|res| match res {
+            Ok(resp) => {
+                let payload: entities::RaftInstallSnapshotResponse = resp.into();
+                HttpResponse::Ok().json(payload)
+            },
+
+            Err(_) => HttpResponse::Ok().finish(),
+        })
 }
 
 // Vote: RaftVoteRequest > RaftVoteResponse
@@ -234,15 +260,13 @@ pub fn vote_route<D, R, E, S>(
     srv.network
         .send(vote_req)
         .map_err(Error::from)
-        .and_then(|res| {
-            match res {
-                Ok(resp) => {
-                    let payload: entities::RaftVoteResponse = resp.into();
-                    HttpResponse::Ok().json(payload)
-                },
+        .and_then(|res| match res {
+            Ok(resp) => {
+                let payload: entities::RaftVoteResponse = resp.into();
+                HttpResponse::Ok().json(payload)
+            },
 
-                Err(_) => HttpResponse::Ok().finish(),
-            }
+            Err(_) => HttpResponse::Ok().finish(),
         })
 }
 
