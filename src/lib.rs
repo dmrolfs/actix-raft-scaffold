@@ -11,7 +11,6 @@ use actix_raft::NodeId;
 
 // pub mod cluster;
 pub mod config;
-pub mod fib;
 pub mod ports;
 pub mod network;
 pub mod storage;

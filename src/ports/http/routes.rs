@@ -7,7 +7,6 @@ use actix_raft::messages as raft_protocol;
 use tracing::*;
 use crate::ports::PortData;
 use super::entities;
-use crate::fib::Fibonacci;
 use crate::network::{GetConnectedNodes, ConnectNode, GetClusterSummary, messages::DisconnectNode, GetNode};
 
 fn node_id_from_path( req: &HttpRequest ) -> Result<u64, std::num::ParseIntError> {
@@ -51,25 +50,9 @@ where
     srv.network
         .send(connect_cmd)
         .map_err( Error::from)
-        .and_then(move |_res| {
-            info!("and now finding fibonacci...");
-
-            srv.fib
-                .send(Fibonacci( nid as u32 ))
-                .map_err(Error::from)
-                .and_then(move |res| {
-                    info!("fibonacci response: {:?}", res);
-                    let answer = res.unwrap().into();
-                    let resp = entities::RaftProtocolResponse {
-                        response: Some(entities::raft_protocol_command_response::Response::Result(
-                            entities::ResponseResult::ConnectionAcknowledged {
-                                node_id: Some(answer),
-                            }
-                        ))
-                    };
-
-                    Ok(HttpResponse::Ok().json(resp))
-                })
+        .and_then(|res| match res {
+            Ok(_) => Ok(HttpResponse::Created().finish()),
+            Err(err) => Err(actix_web::error::ErrorInternalServerError(err))
         })
 }
 
@@ -93,7 +76,7 @@ pub fn disconnect_node_route<D, R, E, S>(
         .send(DisconnectNode(nid))
         .map_err(Error::from)
         .and_then(move |res| match res {
-            Ok(_) => Ok(HttpResponse::Ok().finish()),
+            Ok(_) => Ok(HttpResponse::NoContent().finish()),
             Err(err) => Err(actix_web::error::ErrorInternalServerError(err)),
         })
 }
@@ -172,7 +155,7 @@ pub fn summary_route<D, R, E, S>(
         .map_err(|err| actix_web::error::ErrorInternalServerError(err))
         .and_then(|res| match res {
             Ok(res) => Ok(HttpResponse::Ok().json(res)),
-            Err(err) => { Err(actix_web::error::ErrorInternalServerError(err))},
+            Err(err) => Err(actix_web::error::ErrorInternalServerError(err)),
         })
 }
 

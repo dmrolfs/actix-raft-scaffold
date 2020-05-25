@@ -2,7 +2,6 @@ use actix::prelude::*;
 use actix_raft::{AppData, AppDataResponse, AppError, RaftStorage};
 use thiserror::Error;
 use crate::network::Network;
-use super::fib::FibActor;
 
 pub mod http;
 
@@ -22,7 +21,6 @@ pub struct PortData<D, R, E, S>
         E: AppError,
         S: RaftStorage<D, R, E>,
 {
-    pub fib: Addr<FibActor>,
     pub network: Addr<Network<D, R, E, S>>,
 }
 
@@ -35,7 +33,6 @@ impl<D, R, E, S> std::clone::Clone for PortData<D, R, E, S>
 {
     fn clone(&self) -> Self {
         Self {
-            fib: self.fib.clone(),
             network: self.network.clone(),
         }
     }

@@ -397,12 +397,9 @@ impl<D, R, E, S> RaftSystemBuilder<D, R, E, S>
             .map(|data| data.clone())
             .unwrap_or_else(move || {
             info!(network_id = host_id, "no Raft port data provided, using default.");
-            let fib_act = crate::fib::FibActor::new();
-            let fib_addr = fib_act.start();
 
             PortData {
                 network: network.clone(),
-                fib: fib_addr,
             }
         });
 
