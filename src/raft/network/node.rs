@@ -3,6 +3,10 @@ use actix_raft::{AppData, RaftNetwork, messages as raft_protocol};
 use crate::network::node::Node;
 use tracing::*;
 
+
+mod local;
+mod remote;
+
 impl<D: AppData> RaftNetwork<D> for Node<D> {}
 
 impl<D: AppData> Handler<raft_protocol::AppendEntriesRequest<D>> for Node<D> {

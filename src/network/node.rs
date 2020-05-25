@@ -15,7 +15,12 @@ use super::messages::{
     ChangeClusterConfig,
 };
 
-pub use super::proximity::{ProximityBehavior, LocalNode, RemoteNode};
+pub use super::proximity::ProximityBehavior;
+pub use local::LocalNode;
+pub use remote::RemoteNode;
+
+mod local;
+mod remote;
 
 #[derive(Error, Debug)]
 pub enum NodeError {
