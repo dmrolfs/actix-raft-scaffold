@@ -716,6 +716,8 @@ pub struct RaftProtocolResponse {
 
 pub mod raft_protocol_command_response {
     use serde::{Serialize, Deserialize};
+    use crate::network::messages::RaftProtocolError;
+    use crate::ports::http::entities;
 
     #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
     #[serde(rename_all = "camelCase")]
@@ -723,6 +725,24 @@ pub mod raft_protocol_command_response {
         Result(super::ResponseResult),
         Failure(super::Failure),
         CommandRejectedNotLeader(super::CommandRejectedNotLeader),
+    }
+
+    impl From<RaftProtocolError> for Response {
+        fn from(error: RaftProtocolError) -> Self { match error {
+            RaftProtocolError::NodeNotLeader(id) => {
+                Response::CommandRejectedNotLeader(
+                    entities::CommandRejectedNotLeader { leader_id: id.map(|i| i.into())}
+                )
+            },
+
+            RaftProtocolError::ClientError(description) => {
+                Response::Failure(entities::Failure { description })
+            },
+
+            err => {
+                Response::Failure(entities::Failure { description: err.to_string() })
+            }
+        }}
     }
 }
 

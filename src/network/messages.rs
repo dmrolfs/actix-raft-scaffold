@@ -128,30 +128,6 @@ where
     }
 }
 
-impl Into<entities::raft_protocol_command_response::Response> for RaftProtocolError {
-    fn into(self) -> entities::raft_protocol_command_response::Response {
-        match self {
-            RaftProtocolError::NodeNotLeader(id) => {
-                entities::raft_protocol_command_response::Response::CommandRejectedNotLeader(
-                    entities::CommandRejectedNotLeader { leader_id: id.map(|i| i.into()) }
-                )
-            },
-
-            RaftProtocolError::ClientError(description) => {
-                entities::raft_protocol_command_response::Response::Failure(
-                    entities::Failure { description }
-                )
-            },
-
-            err => {
-                entities::raft_protocol_command_response::Response::Failure(
-                    entities::Failure { description: err.to_string() }
-                )
-            },
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HandleNodeStatusChange {
     pub id: NodeId,
