@@ -5,6 +5,7 @@ use actix_web::{http::header, middleware::Logger, web, App, HttpServer};
 use actix_raft::{AppData, AppDataResponse, AppError, RaftStorage};
 use super::{PortData, PortError};
 use self::routes::*;
+use std::time::Duration;
 
 pub mod routes;
 pub mod entities;
@@ -20,6 +21,11 @@ where
     E: AppError,
     S0: RaftStorage<D, R, E>,
 {
+    //todo: calculate rate limit config from raft config;  how many reqs per client per minute?
+    //todo: configure header key for identifier; default is x-api-key; if no key specified then use IP address
+    //todo: need at least actix 0.9.0
+    // let rate_store = actix_ratelimit::MemoryStore::new();
+
     let server = HttpServer::new( move || {
         App::new()
             .wrap(
@@ -30,6 +36,25 @@ where
                     .max_age(3600),
             )
             .wrap(Logger::default())
+            //todo with actix 0.9.0+
+            // .wrap(
+            //     RateLimiter::new(
+            //         actix_ratelimit::MemoryStoreActor::from(rate_store.clone()).start()
+            //     )
+            //         .with_interval(Duration::from_secs(60))
+            //         .with_max_requests(100)
+            //         // .with_identifier(|req| {
+            //         //     let connection_info = req.connection_info();
+            //         //     let ip = connection_info
+            //         //         .remote()
+            //         //         .ok_or(ARError::IdentificationError)?;
+            //         //     Ok(String::from(ip))
+            //         //
+            //         //     let key = req.headers().get("x-api-key").unwrap();
+            //         //     let key = key.to_str().unwrap();
+            //         //     Ok(key.to_string())
+            //         // })
+            // )
             .data( Arc::new(data.clone()) )
         // .service( web::resource("/").route(web::get().to( || {
         //     HttpResponse::Found()

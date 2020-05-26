@@ -21,6 +21,7 @@ actix-web-codegen = "0.2"
 actix-cors = "0.1.0"
 actix-files = "0.1.6"
 actix-server = "0.6"
+#actix-ratelimit = "0.2.1" //todo need actix 0.9.0
 http = "0.1.17"
 tempfile = "3"
 #frunk = "0.3"
