@@ -5,7 +5,6 @@ use actix_web::{http::header, middleware::Logger, web, App, HttpServer};
 use actix_raft::{AppData, AppDataResponse, AppError, RaftStorage};
 use super::{PortData, PortError};
 use self::routes::*;
-use std::time::Duration;
 
 pub mod routes;
 pub mod entities;

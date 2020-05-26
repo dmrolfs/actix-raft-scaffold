@@ -32,6 +32,8 @@ bytes = "0.4"
 rust-crypto = "0.2"
 fasthash = "0.4"
 config = "0.9"
+#recloser = "0.2.0"
+#failsafe = "0.3.1"
 #rocksdb = "0.13"
 
 actix = "0.8"

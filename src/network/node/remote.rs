@@ -2,7 +2,7 @@ use actix::prelude::*;
 use actix_raft::NodeId;
 use actix_raft::AppData;
 use tracing::*;
-use failsafe::{Config, CircuitBreaker, backoff, failure_policy}; //todo: apply circuit breaker
+// use recloser::{Recloser, r#async::AsyncRecloser}; //todo alas more to add when actix_raft made current with ecosystem
 use crate::NodeInfo;
 use crate::network::proximity::{ProximityBehavior, ChangeClusterBehavior, ConnectionBehavior};
 use crate::network::messages;
@@ -16,6 +16,7 @@ pub struct RemoteNode {
     pub remote_id: NodeId,
     pub remote_info: NodeInfo,
     pub client: reqwest::Client,
+    // circuit_breaker: AsyncRecloser,
 }
 
 impl RemoteNode {
@@ -25,13 +26,25 @@ impl RemoteNode {
             .build()
             .expect(format!("prebuilt client for RemoteNode#{}", remote_id).as_str());
 
-        Self { remote_id, remote_info, client, }
+        //todo base policy on configuration
+        Self { remote_id, remote_info, client  }
     }
 
     pub fn scope(&self) -> String {
         //todo: use encryption
         format!("http://{}/api/cluster", self.remote_info.cluster_address.as_str())
     }
+
+    // fn new_circuit_breaker() -> AsyncRecloser {
+    //     AsyncRecloser::from(
+    //         Recloser::custom()
+    //             .error_rate(0.5)
+    //             .closed_len(100)
+    //             .half_open_len(10)
+    //             .open_wait(Duration::from_secs(30))
+    //             .build()
+    //     )
+    // }
 }
 
 impl std::fmt::Display for RemoteNode {
@@ -46,15 +59,16 @@ impl std::fmt::Debug for RemoteNode {
     }
 }
 
-impl std::clone::Clone for RemoteNode {
-    fn clone(&self) -> Self {
-        Self {
-            remote_id: self.remote_id,
-            remote_info: self.remote_info.clone(),
-            client: self.client.clone(),
-        }
-    }
-}
+// impl std::clone::Clone for RemoteNode {
+//     fn clone(&self) -> Self {
+//         Self {
+//             remote_id: self.remote_id,
+//             remote_info: self.remote_info.clone(),
+//             client: self.client.clone(),
+//             circuit_breaker: RemoteNode::new_circuit_breaker(),
+//         }
+//     }
+// }
 
 impl<D: AppData> ProximityBehavior<D> for RemoteNode {}
 
