@@ -1,6 +1,7 @@
 use std::fmt::Debug;
+use std::marker::PhantomData;
 use actix::Message;
-use actix_raft::NodeId;
+use actix_raft::{NodeId, AppData, AppDataResponse, AppError};
 use serde::{Serialize, Deserialize};
 use strum_macros::{Display as StrumDisplay};
 use thiserror::Error;
@@ -127,6 +128,29 @@ where
         }
     }
 }
+
+
+#[derive(Debug)]
+pub struct ClientRequest<D, R, E>
+where
+    D: AppData,
+    R: AppDataResponse,
+    E: AppError,
+{
+    pub payload: D,
+    marker_resp: PhantomData<R>,
+    marker_err: PhantomData<E>,
+}
+
+impl<D, R, E> Message for ClientRequest<D, R, E>
+    where
+        D: AppData,
+        R: AppDataResponse,
+        E: AppError,
+{
+    type Result = Result<R, E>;
+}
+
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HandleNodeStatusChange {

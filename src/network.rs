@@ -29,9 +29,11 @@ use summary::ClusterSummary;
 pub use messages::NetworkError;
 pub use messages::{
     HandleNodeStatusChange,
-    ConnectNode, Acknowledged
+    ConnectNode, Acknowledged,
+    ClientRequest,
 };
 use crate::network::messages::{ChangeClusterConfig, DisconnectNode};
+use std::option::NoneError;
 
 pub mod state;
 pub mod node;
@@ -612,6 +614,55 @@ impl<D, R, E, S> Handler<BindEndpoint<D, R, E, S>> for Network<D, R, E, S>
         Ok(())
     }
 }
+
+
+impl<D, R, E, S> Handler<ClientRequest<D, R, E>> for Network<D, R, E, S>
+    where
+        D: AppData,
+        Node<D>: Actor<Context = Context<Node<D>>> + Handler<ClientRequest<D, R, E>>,
+        R: AppDataResponse,
+        E: AppError,
+        E: From<NetworkError> + From<NoneError> + From<MailboxError>,
+        S: RaftStorage<D, R, E>,
+{
+    type Result = ResponseActFuture<Self, R, E>;
+
+    #[tracing::instrument(skip(self, _ctx))]
+    fn handle(&mut self, request: ClientRequest<D, R, E>, _ctx: &mut Self::Context) -> Self::Result {
+        Box::new(
+            self.leader_delegate()
+                .then(|res, network, _| {
+                    let res = match res {
+                        Ok(leader) => Ok(leader),
+
+                        Err(NetworkError::NotLeader { leader_id: Some(lid), leader_address }) => {
+                            let leader = network.nodes
+                                .get(&lid)
+                                .and_then(|leader_ref| leader_ref.addr.clone());
+
+                            match leader {
+                                Some(leader_node) => Ok(leader_node),
+                                None => Err(E::from(NetworkError::NotLeader {
+                                    leader_id: Some(lid),
+                                    leader_address,
+                                })),
+                            }
+                        },
+
+                        Err(e) => Err(e.into()),
+                    };
+
+                    fut::result::<Addr<Node<D>>, E, Self>(res)
+                })
+                .and_then(move |leader, _, _| {
+                    fut::wrap_future::<_, Self>(leader.send(request))
+                        .map_err(|err, _, _| E::from(err))
+                })
+                .and_then(|res, _, _| fut::result(res))
+        )
+    }
+}
+
 
 #[derive(Debug, Clone)]
 pub struct GetConnectedNodes;
